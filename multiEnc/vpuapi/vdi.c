@@ -690,6 +690,10 @@ u32 vdi_get_instance_num(u32 core_idx)
         vdi_init_flag[core_idx] == INIT_VDI_STAT_NULL)
         return -1;
 
+    /* Check if instance pool is valid */
+    if (!vdi->pvip)
+        return -1;
+
     return vdi->pvip->vpu_instance_num;
 }
 
@@ -725,6 +729,10 @@ int vdi_lock(u32 core_idx)
 
     if (!vdi || vdi->vpu_fd == -1 ||
         vdi_init_flag[core_idx] == INIT_VDI_STAT_NULL)
+        return -1;
+
+    /* Check if instance pool (pvip) is valid - needed for mutex */
+    if (!vdi->pvip || !vdi->vpu_mutex)
         return -1;
 #if defined(ANDROID) || !defined(PTHREAD_MUTEX_ROBUST_NP)
 	restore_mutex_in_dead((MUTEX_HANDLE *)vdi->vpu_mutex);
@@ -815,6 +823,10 @@ void vdi_write_register(u32 core_idx, unsigned int addr, unsigned int data)
         vdi_init_flag[core_idx] == INIT_VDI_STAT_NULL)
         return;
 
+    /* Check if register mapping is valid */
+    if (vdi->vdb_register.virt_addr == 0 ||
+        vdi->vdb_register.virt_addr == (unsigned long)MAP_FAILED)
+        return;
 
 #ifdef SUPPORT_MULTI_CORE_IN_ONE_DRIVER
     reg_addr = (unsigned long *)(addr + (unsigned long)vdi->vdb_register.virt_addr + (core_idx*VPU_CORE_BASE_OFFSET));
@@ -838,6 +850,10 @@ unsigned int vdi_read_register(u32 core_idx, unsigned int addr)
         vdi_init_flag[core_idx] == INIT_VDI_STAT_NULL)
         return (unsigned int)-1;
 
+    /* Check if register mapping is valid */
+    if (vdi->vdb_register.virt_addr == 0 ||
+        vdi->vdb_register.virt_addr == (unsigned long)MAP_FAILED)
+        return (unsigned int)-1;
 
 #ifdef SUPPORT_MULTI_CORE_IN_ONE_DRIVER
     reg_addr = (unsigned long *)(addr + (unsigned long)vdi->vdb_register.virt_addr + (core_idx*VPU_CORE_BASE_OFFSET));

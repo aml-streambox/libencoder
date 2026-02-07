@@ -156,6 +156,7 @@ RetCode ProductVpuReInit(Uint32 coreIdx, void* firmware, Uint32 size)
         ret = Vp5VpuReInit(coreIdx, firmware, size);
         break;
     default:
+        VLOG(ERR, "ProductVpuReInit: Invalid productId=%d for coreIdx=%d\n", productId, coreIdx);
         ret = RETCODE_NOT_FOUND_VPU_DEVICE;
     }
 
@@ -582,14 +583,24 @@ RetCode ProductCheckEncOpenParam(EncOpenParam* pop)
     productId = s_ProductIds[coreIdx];
     pAttr     = &g_VpuCoreAttributes[coreIdx];
 
+    if (productId == PRODUCT_ID_NONE) {
+        VLOG(ERR, "ProductCheckEncOpenParam: productId is NONE for coreIdx=%d\n", coreIdx);
+    }
+    if (pAttr->supportEncoders == 0) {
+        VLOG(ERR, "ProductCheckEncOpenParam: supportEncoders is 0 for coreIdx=%d (productId=%d)\n", coreIdx, productId);
+    }
+
     if ( pop->bitstreamFormat == STD_AVC && pop->srcBitDepth == 10 && pAttr->supportAVC10bitEnc != TRUE )
         return RETCODE_NOT_SUPPORTED_FEATURE;
 
     if ( pop->bitstreamFormat == STD_HEVC && pop->srcBitDepth == 10 && pAttr->supportHEVC10bitEnc != TRUE )
         return RETCODE_NOT_SUPPORTED_FEATURE;
 
-    if ((pAttr->supportEncoders&(1<<pop->bitstreamFormat)) == 0)
+    if ((pAttr->supportEncoders&(1<<pop->bitstreamFormat)) == 0) {
+        VLOG(ERR, "ProductCheckEncOpenParam: format=%d not supported (supportEncoders=0x%x)\n",
+             pop->bitstreamFormat, pAttr->supportEncoders);
         return RETCODE_NOT_SUPPORTED_FEATURE;
+    }
 
     if (pop->ringBufferEnable == TRUE) {
         if (pop->bitstreamBuffer % 8) {

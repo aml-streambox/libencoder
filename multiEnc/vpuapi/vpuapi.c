@@ -169,21 +169,38 @@ int VPU_GetOpenInstanceNum(Uint32 coreIdx)
 static RetCode InitializeVPU(Uint32 coreIdx, const Uint16* code, Uint32 size)
 {
     RetCode     ret;
+    int         instanceNum;
+    int         productId;
 
     if (vdi_init(coreIdx) < 0)
         return RETCODE_FAILURE;
 
     EnterLock(coreIdx);
 
-    if (vdi_get_instance_num(coreIdx) > 0) {
+    instanceNum = vdi_get_instance_num(coreIdx);
+    productId = ProductVpuGetId(coreIdx);
+
+    /* FIX 2: Always scan if product ID is unknown, regardless of instance count.
+     * Note: ProductVpuScan() must be called AFTER EnterLock() because it reads
+     * hardware registers which require the VPU clock to be enabled.
+     */
+    if (instanceNum > 0 || productId == PRODUCT_ID_NONE) {
         if (ProductVpuScan(coreIdx) == 0) {
             LeaveLock(coreIdx);
             return RETCODE_NOT_FOUND_VPU_DEVICE;
         }
+        /* Re-read productId after scan */
+        productId = ProductVpuGetId(coreIdx);
     }
 
     if (VPU_IsInit(coreIdx) != 0) {
-        ProductVpuReInit(coreIdx, (void *)code, size);
+        /* FIX 1: Check ProductVpuReInit return value */
+        ret = ProductVpuReInit(coreIdx, (void *)code, size);
+        if (ret != RETCODE_SUCCESS) {
+            VLOG(ERR, "InitializeVPU: ProductVpuReInit failed with ret=%d\n", ret);
+            LeaveLock(coreIdx);
+            return ret;  /* Propagate error instead of ignoring */
+        }
         LeaveLock(coreIdx);
         return RETCODE_CALLED_BEFORE;
     }
