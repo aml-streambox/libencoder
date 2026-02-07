@@ -409,13 +409,33 @@ static BOOL SetupEncoderOpenParam(EncOpenParam *pEncOP, AMVEncInitParams* InitPa
   pEncOP->picHeight       = InitParam->height;
   pEncOP->frameRateInfo  =  InitParam->frame_rate;
   pEncOP->bitRate = InitParam->bitrate;
-  pEncOP->rcEnable = InitParam->rate_control;
+  
+  if (InitParam->rc_mode == 2) {
+    pEncOP->rcEnable = 0;
+  } else if (InitParam->rc_mode == 1) {
+    pEncOP->rcEnable = 1;
+  } else {
+    pEncOP->rcEnable = InitParam->rate_control;
+  }
   /* default */
   pEncOP->srcBitDepth     = 8; /*pCfg->SrcBitDepth; */
   param->level = 0;
   param->tier  = 0;
   param->internalBitDepth = 8; /*pCfg->vpCfg.internalBitDepth;*/
-
+  
+  /* For P010 input, set srcBitDepth to 10 and ensure internalBitDepth matches */
+  if (InitParam->fmt == AMVENC_P010) {
+    pEncOP->srcBitDepth = 10;
+    VLOG(INFO, "P010 input detected: srcBitDepth=10\n");
+  }
+  
+  if (InitParam->internal_bit_depth > 0) {
+    param->internalBitDepth = InitParam->internal_bit_depth;
+  } else if (InitParam->fmt == AMVENC_P010) {
+    /* If internal_bit_depth not explicitly set but input is P010, use 10 */
+    param->internalBitDepth = 10;
+  }
+  
   if ( param->internalBitDepth == 10 ) {
     pEncOP->outputFormat = FORMAT_420_P10_16BIT_MSB;
     if (pEncOP->bitstreamFormat == STD_HEVC) {
@@ -434,15 +454,53 @@ static BOOL SetupEncoderOpenParam(EncOpenParam *pEncOP, AMVEncInitParams* InitPa
             param->profile = 0;
     }
   }
-  param->losslessEnable = 0;
+  
+  if (InitParam->lossless_enable > 0) {
+    if (pEncOP->bitstreamFormat == STD_HEVC) {
+      param->losslessEnable = 1;
+    } else {
+      VLOG(ERR, "[ERROR] Lossless encoding is HEVC-only feature, not supported for H.264\n");
+      param->losslessEnable = 0;
+    }
+  } else {
+    param->losslessEnable = 0;
+  }
+  
+  if (param->losslessEnable) {
+    pEncOP->rcEnable = 0;
+    param->nrYEnable = 0;
+    param->nrCbEnable = 0;
+    param->nrCrEnable = 0;
+    param->roiEnable = 0;
+    param->bgDetectEnable = 0;
+    param->skipIntraTrans = 1;
+  }
   param->constIntraPredFlag = 0;
   param->lfCrossSliceBoundaryEnable = 1;
   param->useLongTerm = InitParam->longterm_ref_enable;
 
   /* for CMD_ENC_SEQ_GOP_PARAM */
    //param->gopPresetIdx     = pCfg->vpCfg.gopPresetIdx;
-  if (InitParam->GopPreset == GOP_OPT_NONE)
-  {
+  
+  if (InitParam->gop_pattern > 0) {
+    switch (InitParam->gop_pattern) {
+      case 1:
+        param->gopPresetIdx = PRESET_IDX_IBBBP;
+        break;
+      case 2:
+        param->gopPresetIdx = PRESET_IDX_IBPBP;
+        break;
+      case 3:
+        param->gopPresetIdx = PRESET_IDX_IBBB;
+        break;
+      case 4:
+        param->gopPresetIdx = PRESET_IDX_ALL_I;
+        break;
+      default:
+        param->gopPresetIdx = PRESET_IDX_IPP;
+        break;
+    }
+  } else if (InitParam->GopPreset == GOP_OPT_NONE) {
      if (InitParam->idr_period == 1)
         param->gopPresetIdx = PRESET_IDX_ALL_I; //all I frame
      else
@@ -586,7 +644,10 @@ static BOOL SetupEncoderOpenParam(EncOpenParam *pEncOP, AMVEncInitParams* InitPa
   }
 
   /* for CMD_ENC_SEQ_INTRA_REFRESH_PARAM */
-  if (InitParam->IntraRefreshMode &&
+  if (param->losslessEnable) {
+    param->intraRefreshMode = 0;
+    param->intraRefreshArg = 0;
+  } else if (InitParam->IntraRefreshMode &&
       InitParam->IntraRefreshMode <= 4 &&
       InitParam->IntraRefreshArg &&
       pEncOP->bitstreamFormat == STD_HEVC) {
@@ -620,8 +681,8 @@ static BOOL SetupEncoderOpenParam(EncOpenParam *pEncOP, AMVEncInitParams* InitPa
   //pEncOP->rcEnable             = InitParam -> rate_control;
   pEncOP->vbvBufferSize = 3000;//pCfg->VbvBufferSize;
 
-  param->cuLevelRCEnable = 1; //pCfg->vpCfg.cuLevelRCEnable;
-  param->hvsQPEnable = 1;//pCfg->vpCfg.hvsQPEnable;
+  param->cuLevelRCEnable = !param->losslessEnable ? 1 : 0;
+  param->hvsQPEnable = !param->losslessEnable ? 1 : 0;
   param->hvsQpScale = 2;//pCfg->vpCfg.hvsQpScale;
 
   param->bitAllocMode = 0; //pCfg->vpCfg.bitAllocMode;
@@ -674,7 +735,9 @@ static BOOL SetupEncoderOpenParam(EncOpenParam *pEncOP, AMVEncInitParams* InitPa
         param->gopParam.picParam[i].numRefPicL0);
     }
   }
-  param->roiEnable = InitParam->roi_enable; //pCfg->vpCfg.roiEnable;
+  if (!param->losslessEnable) {
+    param->roiEnable = InitParam->roi_enable; //pCfg->vpCfg.roiEnable;
+  }
   // VPS & VUI
   param->numUnitsInTick = 1000;//pCfg->vpCfg.numUnitsInTick;
   if (pEncOP->bitstreamFormat == STD_AVC)
@@ -687,9 +750,11 @@ static BOOL SetupEncoderOpenParam(EncOpenParam *pEncOP, AMVEncInitParams* InitPa
   param->chromaCrQpOffset = 0; //pCfg->vpCfg.chromaCrQpOffset;
   param->initialRcQp      = -1; //63//pCfg->vpCfg.initialRcQp;
 
-  param->nrYEnable = 1; //pCfg->vpCfg.nrYEnable;
-  param->nrCbEnable = 1; //pCfg->vpCfg.nrCbEnable;
-  param->nrCrEnable = 1; //pCfg->vpCfg.nrCrEnable;
+  if (!param->losslessEnable) {
+    param->nrYEnable = 1; //pCfg->vpCfg.nrYEnable;
+    param->nrCbEnable = 1; //pCfg->vpCfg.nrCbEnable;
+    param->nrCrEnable = 1; //pCfg->vpCfg.nrCrEnable;
+  }
   param->nrNoiseEstEnable = 1;// pCfg->vpCfg.nrNoiseEstEnable;
   param->nrNoiseSigmaY = 0; //pCfg->vpCfg.nrNoiseSigmaY;
   param->nrNoiseSigmaCb = 0; //pCfg->vpCfg.nrNoiseSigmaCb;
@@ -748,8 +813,8 @@ static BOOL SetupEncoderOpenParam(EncOpenParam *pEncOP, AMVEncInitParams* InitPa
   else
     param->avcIdrPeriod         = 0; //pCfg->vpCfg.idrPeriod;
 
-  param->rdoSkip = 1; //pCfg->vpCfg.rdoSkip;
-  param->lambdaScalingEnable = 1; //pCfg->vpCfg.lambdaScalingEnable;
+  param->rdoSkip = !param->losslessEnable ? 1 : 0;
+  param->lambdaScalingEnable = !param->losslessEnable ? 1 : 0;
   if (pEncOP->bitstreamFormat == STD_AVC &&
       (param->profile == AVC_PROFILE_BASE ||
        param->profile == AVC_PROFILE_MAIN)) {
@@ -807,7 +872,7 @@ static BOOL SetupEncoderOpenParam(EncOpenParam *pEncOP, AMVEncInitParams* InitPa
     pEncOP->nv21 = 0;
   pEncOP->packedFormat   = 0;
 
-  if (InitParam->fmt == AMVENC_NV21 || InitParam->fmt == AMVENC_NV12)
+  if (InitParam->fmt == AMVENC_NV21 || InitParam->fmt == AMVENC_NV12 || InitParam->fmt == AMVENC_P010)
      pEncOP->cbcrInterleave = 1;
   else
      pEncOP->cbcrInterleave = 0;
@@ -1548,7 +1613,7 @@ AMVEnc_Status AML_MultiEncSetInput(amv_enc_handle_t ctx_handle,
 
   ctx->op_flag = input->op_flag;
   ctx->fmt = input->fmt;
-  if (ctx->fmt != AMVENC_NV12 && ctx->fmt != AMVENC_NV21 && ctx->fmt != AMVENC_YUV420P) {
+  if (ctx->fmt != AMVENC_NV12 && ctx->fmt != AMVENC_NV21 && ctx->fmt != AMVENC_YUV420P && ctx->fmt != AMVENC_P010) {
 #if SUPPORT_SCALE
         if (ctx->INIT_GE2D) {
             if (ge2d_colorFormat(ctx->fmt) == AMVENC_SUCCESS) {
@@ -1572,7 +1637,7 @@ AMVEnc_Status AML_MultiEncSetInput(amv_enc_handle_t ctx_handle,
       src_stride = vp_align32(ctx->enc_width);
     } else {
       src_stride = input->pitch;
-      if (ctx->fmt == AMVENC_NV12 || ctx->fmt == AMVENC_NV21 || ctx->fmt == AMVENC_YUV420P) {
+      if (ctx->fmt == AMVENC_NV12 || ctx->fmt == AMVENC_NV21 || ctx->fmt == AMVENC_YUV420P || ctx->fmt == AMVENC_P010) {
           if (src_stride % 16) {
             VLOG(ERR, "DMA buffer stride %d  to 16 byte align\n", src_stride);
             return AMVENC_FAIL;
@@ -1631,7 +1696,7 @@ AMVEnc_Status AML_MultiEncSetInput(amv_enc_handle_t ctx_handle,
 #if SUPPORT_SCALE
     if ((input->scale_width !=0 && input->scale_height !=0) || input->crop_left != 0 ||
         input->crop_right != 0 || input->crop_top != 0 || input->crop_bottom != 0 ||
-        (ctx->fmt != AMVENC_NV12 && ctx->fmt != AMVENC_NV21 && ctx->fmt != AMVENC_YUV420P)) {
+        (ctx->fmt != AMVENC_NV12 && ctx->fmt != AMVENC_NV21 && ctx->fmt != AMVENC_YUV420P && ctx->fmt != AMVENC_P010)) {
         if (ctx->INIT_GE2D) {
             ctx->INIT_GE2D = false;
 
@@ -1648,7 +1713,7 @@ AMVEnc_Status AML_MultiEncSetInput(amv_enc_handle_t ctx_handle,
         }
         VLOG(DEBUG, "HEVC TEST sclale, enc_width:%d enc_height:%d  pitch:%d height:%d",
                  ctx->enc_width, ctx->enc_height, input->pitch, input->height);
-        if (ctx->fmt == AMVENC_NV12 || ctx->fmt == AMVENC_NV21 || ctx->fmt == AMVENC_YUV420P) {
+        if (ctx->fmt == AMVENC_NV12 || ctx->fmt == AMVENC_NV21 || ctx->fmt == AMVENC_YUV420P || ctx->fmt == AMVENC_P010) {
             if (input->pitch % 32) {
                 VLOG(ERR, "HEVC crop and scale must be 32bit aligned");
                 return AMVENC_FAIL;
@@ -1726,6 +1791,11 @@ AMVEnc_Status AML_MultiEncSetInput(amv_enc_handle_t ctx_handle,
                          src, ctx->enc_width/2, ctx->enc_height/ 2,
                          chroma_stride / 2, input->pitch / 2, width32alinged,
                          endian);
+      } else if (ctx->fmt == AMVENC_P010) {
+        src = (char *)input->YCbCr[1];
+        yuv_plane_memcpy(ctx->encOpenParam.coreIdx, ctx->pFbSrc[idx].bufCb,
+                         src, ctx->enc_width * 2, ctx->enc_height / 2,
+                         chroma_stride, input->pitch, width32alinged,endian);
       }
     }
     vdi_flush_memory(ctx->encOpenParam.coreIdx, &ctx->pFbSrcMem[idx]);
@@ -1739,6 +1809,10 @@ AMVEnc_Status AML_MultiEncSetInput(amv_enc_handle_t ctx_handle,
     } else if (ctx->fmt == AMVENC_YUV420P) {
        ctx->pFbSrc[idx].bufCb = (PhysicalAddress) (ctx->pFbSrc[idx].bufY + size_src_luma);
        ctx->pFbSrc[idx].bufCr = (PhysicalAddress) (ctx->pFbSrc[idx].bufY + size_src_luma + size_src_luma / 4);
+    } else if (ctx->fmt == AMVENC_P010) {
+       ctx->pFbSrc[idx].bufCb = (PhysicalAddress) (ctx->pFbSrc[idx].bufY + size_src_luma * 2);
+       ctx->pFbSrc[idx].bufCr = (PhysicalAddress) - 1;
+       ctx->pFbSrc[idx].cbcrInterleave = 1;
     }
 #endif
     VLOG(INFO,"frame %d stride %d address Y 0x%x cb 0x%x cr 0x%x \n",

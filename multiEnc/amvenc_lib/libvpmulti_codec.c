@@ -351,6 +351,10 @@ AMVEnc_Status initEncParams(VPMultiEncHandle *handle,
         handle->mEncParams.crop_right = encode_info.crop.right;
         handle->mEncParams.crop_bottom = encode_info.crop.bottom;
     }
+    handle->mEncParams.internal_bit_depth = encode_info.internal_bit_depth;
+    handle->mEncParams.gop_pattern = encode_info.gop_pattern;
+    handle->mEncParams.rc_mode = encode_info.rc_mode;
+    handle->mEncParams.lossless_enable = encode_info.lossless_enable;
     return AMVENC_SUCCESS;
 }
 

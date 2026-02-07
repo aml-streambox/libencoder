@@ -189,6 +189,10 @@ typedef struct vl_encode_info {
   uint8_t matrix_coefficients;
   bool crop_enable;
   crop_info_multi_t crop;
+  int internal_bit_depth;
+  int gop_pattern;
+  int rc_mode;
+  int lossless_enable;
 } vl_encode_info_t;
 
 /* dma buffer info*/
