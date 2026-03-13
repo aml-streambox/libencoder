@@ -1317,7 +1317,6 @@ RetCode Vp5VpuEncInitSeq(CodecInst* instance)
         VpuWriteReg(coreIdx, VP5_CMD_ENC_SEQ_INTRA_REFRESH, pParam->intraRefreshArg<<16 | pParam->intraRefreshMode);
     }
 
-
     VpuWriteReg(coreIdx, VP5_CMD_ENC_SEQ_RC_FRAME_RATE, pOpenParam->frameRateInfo);
     VpuWriteReg(coreIdx, VP5_CMD_ENC_SEQ_RC_TARGET_RATE, pOpenParam->bitRate);
 
@@ -1633,10 +1632,10 @@ RetCode Vp5VpuEncRegisterFramebuffer(CodecInst* inst, FrameBuffer* fbArr, TiledM
     else
         pEncInfo->vbSubSamBuf   = vbSubSamBuf;
 
-    if (bufWidth == VLC_BUF_MODIFY_WIDTH_1920)
-        pEncInfo->vlcBufSize = bufWidth * bufHeight;
     vbTask.size      = (Uint32)((pEncInfo->vlcBufSize * VLC_BUF_NUM) + (pEncInfo->paramBufSize * COMMAND_QUEUE_DEPTH));
     vbTask.phys_addr = 0;
+    VLOG(INFO, "SET_FB task buffer: vlcBufSize=%u paramBufSize=%u VLC_BUF_NUM=%d COMMAND_QUEUE_DEPTH=%d total=%u\n",
+         pEncInfo->vlcBufSize, pEncInfo->paramBufSize, VLC_BUF_NUM, COMMAND_QUEUE_DEPTH, vbTask.size);
     if (pEncInfo->vbTask.size == 0) {
         if (vdi_allocate_dma_memory(coreIdx, &vbTask, ENC_TASK, inst->instIndex) < 0)
             return RETCODE_INSUFFICIENT_RESOURCE;
@@ -1742,6 +1741,22 @@ RetCode Vp5VpuEncRegisterFramebuffer(CodecInst* inst, FrameBuffer* fbArr, TiledM
 
     regVal = VpuReadReg(coreIdx, VP5_RET_SUCCESS);
     if (regVal == 0) {
+        Uint32 failReason = VpuReadReg(coreIdx, VP5_RET_FAIL_REASON);
+        VLOG(ERR, "VP5_SET_FB failed: VP5_RET_SUCCESS=0 VP5_RET_FAIL_REASON=0x%08x\n", failReason);
+        if (failReason & VP5_SYSERR_NEED_MORE_TASK_BUF) {
+            VLOG(ERR, "  decoded fail reason: VP5_SYSERR_NEED_MORE_TASK_BUF (0x%08x)\n", VP5_SYSERR_NEED_MORE_TASK_BUF);
+        }
+        VLOG(ERR, "  picSize=0x%08x stride=%d lumaStride=%u chromaStride=%u\n",
+             picSize, stride, lumaStride, chromaStride);
+        VLOG(ERR, "  internalBitDepth=%d srcFormat=%d outputFormat=%d cbcrInterleave=%d\n",
+             pOpenParam->EncStdParam.vpParam.internalBitDepth,
+             pOpenParam->srcFormat, pOpenParam->outputFormat, cbcrInterleave);
+        VLOG(ERR, "  count=%u mapType=%d codecMode=%d\n", count, mapType, inst->codecMode);
+        for (i = 0; i < (Int32)count && i < 4; i++) {
+            VLOG(ERR, "  FB[%d] Y=0x%08x Cb=0x%08x Cr=0x%08x size=%u stride=%u\n",
+                 i, fbArr[i].bufY, fbArr[i].bufCb, fbArr[i].bufCr,
+                 fbArr[i].size, fbArr[i].stride);
+        }
         return RETCODE_FAILURE;
     }
 
@@ -1836,6 +1851,7 @@ RetCode Vp5VpuEncode(CodecInst* instance, EncParam* option)
     }
 
     srcPixelFormat = justified<<2 | formatNo;
+
 
     VpuWriteReg(coreIdx, VP5_CMD_ENC_BS_START_ADDR, option->picStreamBufferAddr);
     VpuWriteReg(coreIdx, VP5_CMD_ENC_BS_SIZE, option->picStreamBufferSize);

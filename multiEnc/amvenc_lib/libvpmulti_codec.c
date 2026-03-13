@@ -280,6 +280,9 @@ AMVEnc_Status initEncParams(VPMultiEncHandle *handle,
   } else if (encode_info.img_format == IMG_FMT_RGBA8888) {
     VLOG(INFO, "img_format is IMG_FMT_RGBA8888 \n");
     handle->fmt = AMVENC_RGBA8888;
+  } else if (encode_info.img_format == IMG_FMT_P010) {
+    VLOG(INFO, "img_format is IMG_FMT_P010 \n");
+    handle->fmt = AMVENC_P010;
   } else {
     VLOG(ERR, "img_format %d not supprot\n",encode_info.img_format);
     return AMVENC_FAIL;
@@ -1025,6 +1028,9 @@ encoding_metadata_t vl_multi_encoder_encode(vl_codec_handle_t codec_handle,
     } else if (in_buffer_info->buf_fmt == IMG_FMT_RGBA8888) {
       VLOG(INFO, "img_format is IMG_FMT_RGBA8888 \n");
       videoInput.fmt = AMVENC_RGBA8888;
+    } else if (in_buffer_info->buf_fmt == IMG_FMT_P010) {
+      VLOG(INFO, "img_format is IMG_FMT_P010 \n");
+      videoInput.fmt = AMVENC_P010;
     }
 
     if (handle->bufType == CANVAS_BUFFER) {
@@ -1039,6 +1045,14 @@ encoding_metadata_t vl_multi_encoder_encode(vl_codec_handle_t codec_handle,
     if (videoInput.fmt == AMVENC_NV21 || videoInput.fmt == AMVENC_NV12) {
       if (dma_info->num_planes != 1 && dma_info->num_planes != 2) {
           VLOG(ERR, "invalid num_planes %d\n", dma_info->num_planes);
+          result.is_valid = false;
+          result.err_cod = AMVENC_ENCPARAM_MEM_FAIL;
+
+          return result;
+        }
+      } else if (videoInput.fmt == AMVENC_P010) {
+        if (dma_info->num_planes != 1 && dma_info->num_planes != 2) {
+          VLOG(ERR, "P010 invalid num_planes %d\n", dma_info->num_planes);
           result.is_valid = false;
           result.err_cod = AMVENC_ENCPARAM_MEM_FAIL;
 
@@ -1103,6 +1117,8 @@ encoding_metadata_t vl_multi_encoder_encode(vl_codec_handle_t codec_handle,
       videoInput.height * videoInput.pitch);
 
       if (videoInput.fmt == AMVENC_NV21 || videoInput.fmt == AMVENC_NV12) {
+        videoInput.YCbCr[2] = 0;
+      } else if (videoInput.fmt == AMVENC_P010) {
         videoInput.YCbCr[2] = 0;
       } else if (videoInput.fmt == AMVENC_YUV420P) {
         videoInput.YCbCr[2] = (unsigned long)(videoInput.YCbCr[1] + videoInput.height * videoInput.pitch / 4);

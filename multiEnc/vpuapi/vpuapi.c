@@ -707,6 +707,9 @@ RetCode VPU_EncRegisterFrameBuffer(EncHandle handle, FrameBuffer* bufArray, int 
             pCodecInst, fb, (TiledMapType)mapType, num, stride, height, (FrameBufferFormat)openParam->srcFormat,
             openParam->cbcrInterleave, FALSE, openParam->frameEndian, &pEncInfo->vbFrame, 0, FB_TYPE_CODEC);
         if (ret != RETCODE_SUCCESS) {
+            pEncInfo->numFrameBuffers   = 0;
+            pEncInfo->stride            = 0;
+            pEncInfo->frameBufferHeight = 0;
             SetPendingInst(pCodecInst->coreIdx, 0);
             LeaveLock(pCodecInst->coreIdx);
             return ret;
@@ -714,6 +717,12 @@ RetCode VPU_EncRegisterFrameBuffer(EncHandle handle, FrameBuffer* bufArray, int 
     }
 
     ret = ProductVpuRegisterFramebuffer(pCodecInst);
+
+    if (ret != RETCODE_SUCCESS) {
+        pEncInfo->numFrameBuffers   = 0;
+        pEncInfo->stride            = 0;
+        pEncInfo->frameBufferHeight = 0;
+    }
 
     SetPendingInst(pCodecInst->coreIdx, 0);
 
@@ -946,10 +955,16 @@ RetCode VPU_EncStartOneFrame(
               if (pSrcFrame->cbcrInterleave == 0) { //
                   pSrcFrame->bufCr = (PhysicalAddress) (pSrcFrame -> bufCb +
                             pSrcFrame -> height*pSrcFrame -> stride/4);
+              } else {
+                  pSrcFrame->bufCr = (PhysicalAddress) (pSrcFrame->bufCb +
+                            pSrcFrame->height*pSrcFrame->stride/2);
               }
         }
         if (dma_info.num_planes >1 )
                 pSrcFrame -> bufCb = dma_info.phys_addr[1];
+        if (dma_info.num_planes == 2 && pSrcFrame->cbcrInterleave == 1)
+                pSrcFrame->bufCr = (PhysicalAddress) (pSrcFrame->bufCb +
+                            pSrcFrame->height*pSrcFrame->stride/2);
         if (dma_info.num_planes > 2)
                pSrcFrame->bufCr = dma_info.phys_addr[2];
         VLOG(INFO,"DMA frame physical bufY 0x%x Cb 0x%x Cr 0x%x planes %d \n",
@@ -1619,4 +1634,3 @@ RetCode VPU_EncInstParamSync(EncHandle handle,int gopOption, int cust_qp_delta, 
 
     return ret;
 }
-

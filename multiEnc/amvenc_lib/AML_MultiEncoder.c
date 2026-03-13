@@ -865,7 +865,10 @@ static BOOL SetupEncoderOpenParam(EncOpenParam *pEncOP, AMVEncInitParams* InitPa
 
   if (pEncOP->streamBufCount < COMMAND_QUEUE_DEPTH )
     pEncOP->streamBufCount = COMMAND_QUEUE_DEPTH; //for encoder->numSinkPortQueue
-  pEncOP->srcFormat = FORMAT_420;
+  if (InitParam->fmt == AMVENC_P010)
+    pEncOP->srcFormat = FORMAT_420_P10_16BIT_MSB;
+  else
+    pEncOP->srcFormat = FORMAT_420;
   if (InitParam->fmt == AMVENC_NV21)
     pEncOP->nv21 = 1;
   else
@@ -1192,10 +1195,27 @@ static BOOL RegisterFrameBuffers(AMVMultiCtx *ctx)
   pReconFb = ctx->pFbRecon;
   reconFbStride = ctx->reconFbStride;
   reconFbHeight = ctx->reconFbHeight;
+
+  VLOG(TRACE, "RegisterFrameBuffers: fb_num=%d reconStride=%u reconHeight=%u srcFmt=%d outFmt=%d internalBitDepth=%d\n",
+      ctx->fb_num, reconFbStride, reconFbHeight,
+      ctx->encOpenParam.srcFormat, ctx->encOpenParam.outputFormat,
+      ctx->encOpenParam.EncStdParam.vpParam.internalBitDepth);
+  {
+    Uint32 dbg_i;
+    for (dbg_i = 0; dbg_i < ctx->fb_num && dbg_i < 4; dbg_i++) {
+      VLOG(TRACE, "  ReconFB[%u] Y=0x%08lx Cb=0x%08lx Cr=0x%08lx size=%u updateFbInfo=%d\n",
+          dbg_i, (unsigned long)pReconFb[dbg_i].bufY,
+          (unsigned long)pReconFb[dbg_i].bufCb, (unsigned long)pReconFb[dbg_i].bufCr,
+          pReconFb[dbg_i].size, pReconFb[dbg_i].updateFbInfo);
+    }
+  }
+
   result = VPU_EncRegisterFrameBuffer(ctx->enchandle, pReconFb,
         ctx->fb_num, reconFbStride, reconFbHeight, COMPRESSED_FRAME_MAP);
   if (result != RETCODE_SUCCESS) {
-    VLOG(ERR, "Failed to VPU_EncRegisterFrameBuffer(%d)\n", result);
+    VLOG(ERR, "Failed to VPU_EncRegisterFrameBuffer(%d) with external recon buffers, fb_num=%d stride=%u height=%u srcFmt=%d outFmt=%d\n",
+        result, ctx->fb_num, reconFbStride, reconFbHeight,
+        ctx->encOpenParam.srcFormat, ctx->encOpenParam.outputFormat);
     ChekcAndPrintDebugInfo(ctx->enchandle, TRUE, result);
     return FALSE;
   }
@@ -1823,7 +1843,7 @@ AMVEnc_Status AML_MultiEncSetInput(amv_enc_handle_t ctx_handle,
 
   } else { //DMA buffer
 #if SUPPORT_SCALE
-    if (ctx->fmt != AMVENC_NV12 && ctx->fmt != AMVENC_NV21 && ctx->fmt != AMVENC_YUV420P) {
+    if (ctx->fmt != AMVENC_NV12 && ctx->fmt != AMVENC_NV21 && ctx->fmt != AMVENC_YUV420P && ctx->fmt != AMVENC_P010) {
         if (ctx->INIT_GE2D) {
             ctx->INIT_GE2D = false;
             ctx->amlge2d.ge2dinfo.src_info[0].format = SRC1_PIXFORMAT;

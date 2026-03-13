@@ -233,7 +233,7 @@ int main(int argc, const char *argv[])
 		printf("  framerate\t: framerate \n");
 		printf("  bitrate  \t: bit rate \n");
 		printf("  num      \t: encode frame count \n");
-		printf("  fmt      \t: encode input fmt 1 : nv12, 2 : nv21, 3 : yuv420p(yv12/yu12), 5 : RGB888, 6 : RGBA8888\n");
+		printf("  fmt      \t: encode input fmt 1 : nv12, 2 : nv21, 3 : yuv420p(yv12/yu12), 5 : RGB888, 6 : RGBA8888, 7 : P010\n");
 		printf("  buf_type \t: 0:vmalloc, 3:dma buffer\n");
 		printf("  num_planes \t: used for dma buffer case. 2 : nv12/nv21, 3 : yuv420p(yv12/yu12)\n");
 		printf("  codec_id \t: 4 : h.264, 5 : h.265\n");
@@ -681,14 +681,25 @@ static void *encode_thread(void *param)
 		{
 			framesize = src_buf_stride * height * 4;
 		}
+		else if (fmt == IMG_FMT_P010)
+		{
+			framesize = src_buf_stride * height * 3;
+		}
 		else
 		{
 			framesize = src_buf_stride * height * 3 / 2;
 		}
-		ysize = src_buf_stride * height;
-		usize = src_buf_stride * height / 4;
-		vsize = src_buf_stride * height / 4;
-		uvsize = src_buf_stride * height / 2;
+		if (fmt == IMG_FMT_P010) {
+			ysize = src_buf_stride * height * 2;
+			usize = src_buf_stride * height / 2;
+			vsize = src_buf_stride * height / 2;
+			uvsize = src_buf_stride * height;
+		} else {
+			ysize = src_buf_stride * height;
+			usize = src_buf_stride * height / 4;
+			vsize = src_buf_stride * height / 4;
+			uvsize = src_buf_stride * height / 2;
+		}
 	} else {
 		if (fmt == IMG_FMT_RGB888)
 		{
@@ -698,14 +709,25 @@ static void *encode_thread(void *param)
 		{
 			framesize = width * height * 4;
 		}
+		else if (fmt == IMG_FMT_P010)
+		{
+			framesize = width * height * 3;
+		}
 		else
 		{
 			framesize = width * height * 3 / 2;
 		}
-		ysize = width * height;
-		usize = width * height / 4;
-		vsize = width * height / 4;
-		uvsize = width * height / 2;
+		if (fmt == IMG_FMT_P010) {
+			ysize = width * height * 2;
+			usize = width * height / 2;
+			vsize = width * height / 2;
+			uvsize = width * height;
+		} else {
+			ysize = width * height;
+			usize = width * height / 4;
+			vsize = width * height / 4;
+			uvsize = width * height / 2;
+		}
 	}
 
 	memset(&inbuf_info, 0, sizeof(vl_buffer_info_t));
@@ -882,7 +904,7 @@ static void *encode_thread(void *param)
 			}
 			dma_info->shared_fd[0] = ret;
 			input[0] = vaddr;
-			if (fmt != IMG_FMT_NV12 && fmt != IMG_FMT_NV21)
+			if (fmt != IMG_FMT_NV12 && fmt != IMG_FMT_NV21 && fmt != IMG_FMT_P010)
 			{
 				printf("error fmt %d\n", fmt);
 				goto exit;

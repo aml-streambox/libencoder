@@ -77,6 +77,7 @@ typedef enum vl_img_format_e {
   IMG_FMT_YV12,
   IMG_FMT_RGB888,
   IMG_FMT_RGBA8888,
+  IMG_FMT_P010,
 } vl_img_format_t;
 
 typedef enum vl_frame_type_e {

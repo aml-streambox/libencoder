@@ -53,6 +53,7 @@
 #define VP5_SYSERR_VLC_BUF_FULL                                       0x00010000
 #define VP5_SYSERR_WATCHDOG_TIMEOUT                                   0x00020000
 #define VP5_ERROR_FW_FATAL                                            0x00200000
+#define VP5_SYSERR_NEED_MORE_TASK_BUF                                 0x00400000
 #define VP5_IRB_FRAME_DROP                                            0x10000000
 #define VP5_INPLACE_V                                                 0x20000000
 
@@ -181,4 +182,3 @@
 #define VP5_SPECWARN_OVER_LEVEL                                       0x00200000
 
 #endif /* ERROR_CODE_H_INCLUDED */
-
