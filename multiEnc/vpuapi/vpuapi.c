@@ -953,12 +953,12 @@ RetCode VPU_EncStartOneFrame(
               pSrcFrame -> bufCb = (PhysicalAddress) (pSrcFrame -> bufY +
                         pSrcFrame -> height*pSrcFrame -> stride);
               if (pSrcFrame->cbcrInterleave == 0) { //
-                  pSrcFrame->bufCr = (PhysicalAddress) (pSrcFrame -> bufCb +
-                            pSrcFrame -> height*pSrcFrame -> stride/4);
-              } else {
-                  pSrcFrame->bufCr = (PhysicalAddress) (pSrcFrame->bufCb +
-                            pSrcFrame->height*pSrcFrame->stride/2);
-              }
+                   pSrcFrame->bufCr = (PhysicalAddress) (pSrcFrame -> bufCb +
+                             pSrcFrame -> height*pSrcFrame -> stride/4);
+               } else {
+                   pSrcFrame->bufCr = (PhysicalAddress) (pSrcFrame->bufCb +
+                             pSrcFrame->height*pSrcFrame->stride/2);
+               }
         }
         if (dma_info.num_planes >1 )
                 pSrcFrame -> bufCb = dma_info.phys_addr[1];

@@ -45,6 +45,7 @@
 #include <sys/errno.h>		/* fopen/fread */
 #include <sys/types.h>
 #include <sys/time.h>
+#include <errno.h>
 
 #include "vdi.h"
 #include "vdi_osal.h"
@@ -196,22 +197,29 @@ int vdi_init(u32 core_idx)
         return 0;
     }
 
+    VLOG(INFO, "[VDI] init start core=%u flag=%d fd=%d task_num=%d device=%s\n",
+         core_idx, vdi_init_flag[core_idx], vdi->vpu_fd, vdi->task_num, VPU_DEVICE_NAME);
     vdi_init_flag[core_idx] = INIT_VDI_STAT_OPENING;
 retry:
     vdi->vpu_fd = open(VPU_DEVICE_NAME, O_RDWR);
     if (vdi->vpu_fd < 0) {
         if (retry_cnt >= INIT_RETRY) {
-                VLOG(ERR, "[VDI] Can't open vpu driver. [error=%s]\n", strerror(errno));
+                VLOG(ERR, "[VDI] Can't open vpu driver after %d retries. [device=%s error=%s errno=%d]\n",
+                     retry_cnt, VPU_DEVICE_NAME, strerror(errno), errno);
                 vdi_init_flag[core_idx] = INIT_VDI_STAT_DONE;
                 pthread_mutex_unlock(&vid_mutex);
                 return -1;
         } else {
-                VLOG(ERR,"[VDI] Init open vpu driver fail retrying \n");
+                VLOG(ERR,"[VDI] Init open vpu driver fail retrying core=%u retry=%d device=%s errno=%d(%s)\n",
+                     core_idx, retry_cnt, VPU_DEVICE_NAME, errno, strerror(errno));
                 retry_cnt ++;
                 osal_msleep(100);
                 goto retry;
         }
     }
+
+    VLOG(INFO, "[VDI] opened vpu driver core=%u fd=%d after retry=%d\n",
+         core_idx, vdi->vpu_fd, retry_cnt);
 
     memset(vdi->vpu_buffer_pool, 0x00, sizeof(vpudrv_buffer_pool_t)*MAX_VPU_BUFFER_POOL);
     vdi_init_flag[core_idx] = INIT_VDI_STAT_ALLOC;

@@ -1519,6 +1519,8 @@ RetCode Vp5VpuEncGetSeqInfo(CodecInst* instance, EncInitialInfo* info)
     info->maxLatencyPictures    = VpuReadReg(instance->coreIdx, VP5_RET_ENC_PIC_MAX_LATENCY_PICTURES);
     info->vlcBufSize            = VpuReadReg(instance->coreIdx, VP5_RET_VLC_BUF_SIZE);
     info->paramBufSize          = VpuReadReg(instance->coreIdx, VP5_RET_PARAM_BUF_SIZE);
+    VLOG(ERR, "ENC_INIT_SEQ returned buffer sizes: vlcBufSize=%u paramBufSize=%u\n",
+         info->vlcBufSize, info->paramBufSize);
     pEncInfo->vlcBufSize        = info->vlcBufSize;
     pEncInfo->paramBufSize      = info->paramBufSize;
 
@@ -1634,18 +1636,27 @@ RetCode Vp5VpuEncRegisterFramebuffer(CodecInst* inst, FrameBuffer* fbArr, TiledM
 
     vbTask.size      = (Uint32)((pEncInfo->vlcBufSize * VLC_BUF_NUM) + (pEncInfo->paramBufSize * COMMAND_QUEUE_DEPTH));
     vbTask.phys_addr = 0;
-    VLOG(INFO, "SET_FB task buffer: vlcBufSize=%u paramBufSize=%u VLC_BUF_NUM=%d COMMAND_QUEUE_DEPTH=%d total=%u\n",
-         pEncInfo->vlcBufSize, pEncInfo->paramBufSize, VLC_BUF_NUM, COMMAND_QUEUE_DEPTH, vbTask.size);
+    VLOG(ERR, "SET_FB task buffer plan: vlcBufSize=%u paramBufSize=%u VLC_BUF_NUM=%d COMMAND_QUEUE_DEPTH=%d total=%u existingTaskSize=%u\n",
+         pEncInfo->vlcBufSize, pEncInfo->paramBufSize, VLC_BUF_NUM, COMMAND_QUEUE_DEPTH, vbTask.size,
+         pEncInfo->vbTask.size);
     if (pEncInfo->vbTask.size == 0) {
-        if (vdi_allocate_dma_memory(coreIdx, &vbTask, ENC_TASK, inst->instIndex) < 0)
+        if (vdi_allocate_dma_memory(coreIdx, &vbTask, ENC_TASK, inst->instIndex) < 0) {
+            VLOG(ERR, "SET_FB task buffer allocation failed: requested=%u bytes\n", vbTask.size);
             return RETCODE_INSUFFICIENT_RESOURCE;
+        }
 
         vdi_clear_memory(coreIdx, vbTask.phys_addr, vbTask.size, 0);
 
         pEncInfo->vbTask = vbTask;
+        VLOG(ERR, "SET_FB task buffer allocated: phys=0x%08x size=%u\n",
+             pEncInfo->vbTask.phys_addr, pEncInfo->vbTask.size);
 
         VpuWriteReg(coreIdx, VP5_CMD_SET_FB_ADDR_TASK_BUF, pEncInfo->vbTask.phys_addr);
         VpuWriteReg(coreIdx, VP5_CMD_SET_FB_TASK_BUF_SIZE, vbTask.size);
+    }
+    else {
+        VLOG(ERR, "SET_FB reusing task buffer: phys=0x%08x size=%u\n",
+             pEncInfo->vbTask.phys_addr, pEncInfo->vbTask.size);
     }
 
     VpuWriteReg(coreIdx, VP5_ADDR_SUB_SAMPLED_FB_BASE, vbSubSamBuf.phys_addr);     // set sub-sampled buffer base addr

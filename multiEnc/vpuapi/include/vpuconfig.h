@@ -160,4 +160,3 @@
 #define VP5_PRI_AXI_ID            0x0
 
 #endif  /* _VPU_CONFIG_H_ */
-

@@ -886,6 +886,25 @@ static BOOL SetupEncoderOpenParam(EncOpenParam *pEncOP, AMVEncInitParams* InitPa
   pEncOP->coreIdx        = 0;
   pEncOP->cbcrOrder      = CBCR_ORDER_NORMAL;
   pEncOP->lowLatencyMode = 0; // 2bits lowlatency mode setting. bit[1]: low latency interrupt enable, bit[0]: fast bitstream-packing enable.
+  VLOG(INFO,
+       "SetupEncoderOpenParam: codec=%d fmt=%d src=%dx%d bitrate=%d fr=%d gop=%d rcEnable=%d srcBitDepth=%d internalBitDepth=%d srcFormat=%d outFormat=%d cbcrInterleave=%d nv21=%d streamBufCount=%d streamBufSize=%d lineBufIntEn=%d",
+       pEncOP->bitstreamFormat,
+       InitParam->fmt,
+       pEncOP->picWidth,
+       pEncOP->picHeight,
+       pEncOP->bitRate,
+       pEncOP->frameRateInfo,
+       InitParam->idr_period,
+       pEncOP->rcEnable,
+       pEncOP->srcBitDepth,
+       param->internalBitDepth,
+       pEncOP->srcFormat,
+       pEncOP->outputFormat,
+       pEncOP->cbcrInterleave,
+       pEncOP->nv21,
+       pEncOP->streamBufCount,
+       pEncOP->streamBufSize,
+       pEncOP->lineBufIntEn);
   return TRUE;
 }
 
@@ -1432,6 +1451,9 @@ amv_enc_handle_t AML_MultiEncInitialize(AMVEncInitParams* encParam)
         goto fail_exit;
   coreIdx = ctx->encOpenParam.coreIdx;
   retCode = VPU_Init(coreIdx);
+  VLOG(INFO, "AML_MultiEncInitialize: VPU_Init core=%u ret=0x%x width=%d height=%d fmt=%d depth=%d bitrate=%d\n",
+       coreIdx, retCode, encParam->width, encParam->height, encParam->fmt,
+       encParam->internal_bit_depth, encParam->bitrate);
   if (retCode != RETCODE_SUCCESS && retCode != RETCODE_CALLED_BEFORE) {
         VLOG(INFO, "Failed to VPU_Init, ret(%08x)\n", retCode);
         goto fail_exit;
@@ -1456,6 +1478,9 @@ amv_enc_handle_t AML_MultiEncInitialize(AMVEncInitParams* encParam)
     goto fail_exit;
   }
 
+  VLOG(INFO, "AML_MultiEncInitialize: bsBuffer phys=0x%x size=%u\n",
+       ctx->bsBuffer[0].phys_addr, ctx->bsBuffer[0].size);
+
   ctx->encOpenParam.bitstreamBuffer = ctx->bsBuffer[0].phys_addr;
   ctx->encOpenParam.bitstreamBufferSize = ctx->bsBuffer[0].size;
 
@@ -1465,6 +1490,21 @@ amv_enc_handle_t AML_MultiEncInitialize(AMVEncInitParams* encParam)
   // real open the encoder with OpenParam
   if ((result = VPU_EncOpen(&ctx->enchandle, &ctx->encOpenParam)) != RETCODE_SUCCESS) {
     VLOG(ERR, "VPU_EncOpen failed Error code is 0x%x \n", result);
+    VLOG(ERR,
+         "VPU_EncOpen params: core=%d src=%dx%d srcFormat=%d outFormat=%d srcBitDepth=%d internalBitDepth=%d cbcrInterleave=%d nv21=%d streamBufSize=%d bitstreamBuffer=0x%x bitstreamBufferSize=0x%x rcEnable=%d\n",
+         ctx->encOpenParam.coreIdx,
+         ctx->encOpenParam.picWidth,
+         ctx->encOpenParam.picHeight,
+         ctx->encOpenParam.srcFormat,
+         ctx->encOpenParam.outputFormat,
+         ctx->encOpenParam.srcBitDepth,
+         ctx->encOpenParam.EncStdParam.vpParam.internalBitDepth,
+         ctx->encOpenParam.cbcrInterleave,
+         ctx->encOpenParam.nv21,
+         ctx->encOpenParam.streamBufSize,
+         ctx->encOpenParam.bitstreamBuffer,
+         ctx->encOpenParam.bitstreamBufferSize,
+         ctx->encOpenParam.rcEnable);
     ctx->enchandle = NULL;
     goto fail_exit;
   }
