@@ -638,8 +638,8 @@ void write_sps_3d_extension(h265_stream_t* h, bs_t* b)
 
 int write_hevc_decode_short_term_rps(bs_t*b, h265_stream_t* h/*const HEVCSPS *sps*/, int  stRpsIdx)
 {
-    int delta_poc;
     int i;
+    int refRpsIdx = stRpsIdx - 1;
     sps_h265_t* sps = h->sps;
     st_ref_pic_set_t* strps = &h->strps[stRpsIdx];
 
@@ -650,12 +650,16 @@ int write_hevc_decode_short_term_rps(bs_t*b, h265_stream_t* h/*const HEVCSPS *sp
     if (strps->inter_ref_pic_set_prediction_flag) {
         if (stRpsIdx == sps->num_short_term_ref_pic_sets)
             bs_write_ue(b,strps->delta_idx_minus1);
+        if (stRpsIdx == sps->num_short_term_ref_pic_sets)
+            refRpsIdx = stRpsIdx - (strps->delta_idx_minus1 + 1);
         bs_write_u1(b,strps->delta_rps_sign);
         bs_write_ue(b,strps->abs_delta_rps_minus1);
 
         const ShortTermRPS *rps_ridx;
 
-        rps_ridx = &h->st_rps[stRpsIdx];
+        if (refRpsIdx < 0)
+            refRpsIdx = 0;
+        rps_ridx = &h->st_rps[refRpsIdx];
 
         for (i = 0; i <= rps_ridx->num_delta_pocs; i++) {
             bs_write_u1(b, strps->used_by_curr_pic_flag[i]);
@@ -684,11 +688,15 @@ int write_hevc_decode_short_term_rps(bs_t*b, h265_stream_t* h/*const HEVCSPS *sp
 int hevc_decode_short_term_rps(bs_t*b, h265_stream_t* h/*const HEVCSPS *sps*/, int  stRpsIdx)
 {
     int i;
+    int refRpsIdx = stRpsIdx - 1;
+    int num_delta_pocs = 0;
     sps_h265_t* sps = h->sps;
     st_ref_pic_set_t* strps = &h->strps[stRpsIdx];
+    ShortTermRPS *cur_rps = &h->st_rps[stRpsIdx];
     if (1)
     {
         memset(strps,0,sizeof(st_ref_pic_set_t));
+        memset(cur_rps,0,sizeof(ShortTermRPS));
     }
 
     if (stRpsIdx != 0)
@@ -699,8 +707,13 @@ int hevc_decode_short_term_rps(bs_t*b, h265_stream_t* h/*const HEVCSPS *sps*/, i
         const ShortTermRPS *rps_ridx;
         if (stRpsIdx == sps->num_short_term_ref_pic_sets)
             strps->delta_idx_minus1 = bs_read_ue(b);
+        if (stRpsIdx == sps->num_short_term_ref_pic_sets)
+            refRpsIdx = stRpsIdx - (strps->delta_idx_minus1 + 1);
 
-        rps_ridx = &h->st_rps[stRpsIdx];
+        if (refRpsIdx < 0)
+            refRpsIdx = 0;
+
+        rps_ridx = &h->st_rps[refRpsIdx];
 
         strps->delta_rps_sign = bs_read_u1(b);//get_bits1(gb);
         strps->abs_delta_rps_minus1  = bs_read_ue(b);//get_ue_golomb_long(gb) + 1;
@@ -711,10 +724,17 @@ int hevc_decode_short_term_rps(bs_t*b, h265_stream_t* h/*const HEVCSPS *sps*/, i
             if (!strps->used_by_curr_pic_flag[i]) {
                 strps->use_delta_flag[i] = bs_read_u1(b);//get_bits1(gb);
             }
+
+            if (strps->used_by_curr_pic_flag[i] || strps->use_delta_flag[i]) {
+                num_delta_pocs++;
+            }
         }
+        cur_rps->num_delta_pocs = num_delta_pocs;
     } else {
         strps->num_negative_pics = bs_read_ue(b);//get_ue_golomb_long(gb);
         strps->num_positive_pics       = bs_read_ue(b);//get_ue_golomb_long(gb);
+        cur_rps->num_negative_pics = strps->num_negative_pics;
+        cur_rps->num_delta_pocs = strps->num_negative_pics + strps->num_positive_pics;
 
         for (i = 0; i < strps->num_negative_pics; i++) {
             strps->delta_poc_s0_minus1[i] = bs_read_ue(b);//get_ue_golomb_long(gb) + 1;

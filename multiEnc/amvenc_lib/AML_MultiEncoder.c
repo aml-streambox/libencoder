@@ -538,9 +538,11 @@ static BOOL SetupEncoderOpenParam(EncOpenParam *pEncOP, AMVEncInitParams* InitPa
   if (InitParam->lossless_enable > 0) {
     if (pEncOP->bitstreamFormat == STD_HEVC) {
       param->losslessEnable = 1;
-      // FIX: Set Main RExt profile for lossless encoding
-      param->profile = HEVC_PROFILE_MAINREXT;
-      VLOG(INFO, "HEVC Lossless mode enabled: profile set to Main RExt (%d)\n", param->profile);
+      /* Wave521 product validation only accepts HEVC profiles Main/Main10/
+       * Still Picture at open time. For lossless, keep the firmware-supported
+       * profile selection and rely on losslessEnable + QP=0 + rcEnable=0. */
+      param->profile = (param->internalBitDepth > 8) ? HEVC_PROFILE_MAIN10 : HEVC_PROFILE_MAIN;
+      VLOG(INFO, "HEVC Lossless mode enabled: using supported HEVC profile (%d)\n", param->profile);
     } else {
       VLOG(ERR, "[ERROR] Lossless encoding is HEVC-only feature, not supported for H.264\n");
       param->losslessEnable = 0;
@@ -669,7 +671,8 @@ static BOOL SetupEncoderOpenParam(EncOpenParam *pEncOP, AMVEncInitParams* InitPa
   VLOG(INFO, "GopPreset GOP format (%d) period %d LongTermRef %d\n",
         param->gopPresetIdx, param->intraPeriod, param->useLongTerm);
 
-  param->intraQP = InitParam ->initQP; //pCfg->vpCfg.intraQP;
+  if (!param->losslessEnable)
+    param->intraQP = InitParam ->initQP; //pCfg->vpCfg.intraQP;
   param->forcedIdrHeaderEnable = 0; //pCfg->vpCfg.forcedIdrHeaderEnable;
 
   /* for CMD_ENC_SEQ_CONF_WIN_TOP_BOT/LEFT_RIGHT */
@@ -836,14 +839,15 @@ static BOOL SetupEncoderOpenParam(EncOpenParam *pEncOP, AMVEncInitParams* InitPa
 
   param->chromaCbQpOffset = 0; //pCfg->vpCfg.chromaCbQpOffset;
   param->chromaCrQpOffset = 0; //pCfg->vpCfg.chromaCrQpOffset;
-  param->initialRcQp      = -1; //63//pCfg->vpCfg.initialRcQp;
+  if (!param->losslessEnable)
+    param->initialRcQp      = -1; //63//pCfg->vpCfg.initialRcQp;
 
   if (!param->losslessEnable) {
     param->nrYEnable = 1; //pCfg->vpCfg.nrYEnable;
     param->nrCbEnable = 1; //pCfg->vpCfg.nrCbEnable;
     param->nrCrEnable = 1; //pCfg->vpCfg.nrCrEnable;
   }
-  param->nrNoiseEstEnable = 1;// pCfg->vpCfg.nrNoiseEstEnable;
+  param->nrNoiseEstEnable = !param->losslessEnable ? 1 : 0;// pCfg->vpCfg.nrNoiseEstEnable;
   param->nrNoiseSigmaY = 0; //pCfg->vpCfg.nrNoiseSigmaY;
   param->nrNoiseSigmaCb = 0; //pCfg->vpCfg.nrNoiseSigmaCb;
   param->nrNoiseSigmaCr = 0; //pCfg->vpCfg.nrNoiseSigmaCr;
@@ -1557,11 +1561,11 @@ amv_enc_handle_t AML_MultiEncInitialize(AMVEncInitParams* encParam)
         goto fail_exit;
   coreIdx = ctx->encOpenParam.coreIdx;
   retCode = VPU_Init(coreIdx);
-  VLOG(INFO, "AML_MultiEncInitialize: VPU_Init core=%u ret=0x%x width=%d height=%d fmt=%d depth=%d bitrate=%d\n",
+  VLOG(ERR, "AML_MultiEncInitialize: VPU_Init core=%u ret=0x%x width=%d height=%d fmt=%d depth=%d bitrate=%d\n",
        coreIdx, retCode, encParam->width, encParam->height, encParam->fmt,
        encParam->internal_bit_depth, encParam->bitrate);
   if (retCode != RETCODE_SUCCESS && retCode != RETCODE_CALLED_BEFORE) {
-        VLOG(INFO, "Failed to VPU_Init, ret(%08x)\n", retCode);
+        VLOG(ERR, "Failed to VPU_Init, ret(%08x)\n", retCode);
         goto fail_exit;
   }
   retCode = PrintVpuProductInfo(coreIdx, &productInfo);
@@ -1623,15 +1627,20 @@ amv_enc_handle_t AML_MultiEncInitialize(AMVEncInitParams* encParam)
         EncVpParam *param = &ctx->encOpenParam.EncStdParam.vpParam;
         VLOG(ERR, "LOSSLESS ERROR: losslessEnable=%d profile=%d initialRcQp=%d intraQP=%d rcEnable=%d\n",
              param->losslessEnable, param->profile, param->initialRcQp, param->intraQP, ctx->encOpenParam.rcEnable);
-        VLOG(ERR, "LOSSLESS ERROR: HEVC requires Main RExt profile (4), QP=0, and rcEnable=0\n");
-        VLOG(ERR, "LOSSLESS ERROR: Check that HEVC_PROFILE_MAINREXT=4 is defined in vpuapi.h\n");
+        VLOG(ERR, "LOSSLESS ERROR: HEVC lossless requires firmware-supported HEVC profile, QP=0, and rcEnable=0\n");
     }
     ctx->enchandle = NULL;
     goto fail_exit;
   }
-  if (VPU_EncInstParamSync(ctx->enchandle,encParam->GopPreset,
-    encParam->cust_qp_delta,NULL) != RETCODE_SUCCESS) {
-    VLOG(ERR, "VPU instance param sync with open param failed\n");
+  /* Wave521 preset GOP startup is driven by gopPresetIdx in the open params.
+   * The legacy instance-param sync path carries the older gopOption dialect
+   * and is not needed for gop_pattern-based preset startup. Skip it there to
+   * avoid spurious sync failures for B-frame modes like IBBBP. */
+  if (encParam->gop_pattern <= 0) {
+    if (VPU_EncInstParamSync(ctx->enchandle, encParam->GopPreset,
+      encParam->cust_qp_delta, NULL) != RETCODE_SUCCESS) {
+      VLOG(ERR, "VPU instance param sync with open param failed\n");
+    }
   }
 
   // customer buffers allocat and settins
@@ -2633,7 +2642,9 @@ retry_pointB:
         VPU_EncGetBitstreamBuffer(ctx->enchandle, &paRdPtr, &paWrPtr, &size);
         VLOG(TRACE, "INT_BSBUF_FULL %d, %d\n",   paRdPtr, paWrPtr);
         ctx->fullInterrupt = TRUE;
-        return AMVENC_FAIL; //return TRUE;
+        *buf_nal_size = 0;
+        Retframe->YCbCr[0] = 0;
+        return AMVENC_SUCCESS;
     }
     else if (intStatus == ENC_INT_STATUS_NONE) {
        Uint32  intr_usr = 0;
@@ -2655,8 +2666,10 @@ retry_pointB:
     osal_memset(&encOutputInfo, 0x00, sizeof(EncOutputInfo));
     encOutputInfo.result = VPU_EncGetOutputInfo(ctx->enchandle, &encOutputInfo);
     if (encOutputInfo.result == RETCODE_REPORT_NOT_READY) {
-         VLOG(ERR, "no encode yet !!!\n");
-        return AMVENC_FAIL; //return TRUE; /* Not encoded yet */
+         VLOG(INFO, "no encoded picture ready yet\n");
+         *buf_nal_size = 0;
+         Retframe->YCbCr[0] = 0;
+        return AMVENC_SUCCESS;
     }
     else if (encOutputInfo.result == RETCODE_VLC_BUF_FULL) {
         VLOG(ERR, "VLC BUFFER FULL!!! ALLOCATE MORE TASK BUFFER(%d)!!!\n", ONE_TASKBUF_SIZE_FOR_CQ);

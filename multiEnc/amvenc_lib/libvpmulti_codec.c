@@ -128,6 +128,7 @@ typedef struct vp_multi_s {
   AMVEncBufferType bufType;
   bool mPrependSPSPPSToIDRFrames;
   bool mSpsPpsHeaderReceived;
+  bool mHeaderPrependedToStream;
   bool mKeyFrameRequested;
   bool mSkipFrameRequested;
   int mLongTermRefRequestFlags;
@@ -261,6 +262,22 @@ AMVEnc_Status initEncParams(VPMultiEncHandle *handle,
     if (encode_info.enc_feature_opts & 0x7c) {
         handle->mEncParams.GopPreset = (AMVGOPModeOPT)
                 ((encode_info.enc_feature_opts >>2) & 0x1f);
+    }
+
+    /* Newer GStreamer userspace passes gop_pattern directly. Mirror it into
+     * the legacy GopPreset field too so VPU_EncInstParamSync() gets a
+     * consistent non-zero preset for B-frame paths. */
+    if (encode_info.gop_pattern > 0) {
+        switch (encode_info.gop_pattern) {
+            case 1:
+                handle->mEncParams.GopPreset = GOP_IBBBP;
+                break;
+            case 4:
+                handle->mEncParams.GopPreset = GOP_ALL_I;
+                break;
+            default:
+                break;
+        }
     }
 
    VLOG(TRACE, "enc_feature_opts is 0x%x , GopPresetis 0x%x \n",encode_info.enc_feature_opts,handle->mEncParams.GopPreset);
@@ -478,6 +495,7 @@ vl_codec_handle_t vl_multi_encoder_init(vl_codec_id_t codec_id,
   mHandle->mPrependSPSPPSToIDRFrames =
                 encode_info.prepend_spspps_to_idr_frames;
   mHandle->mSpsPpsHeaderReceived = false;
+  mHandle->mHeaderPrependedToStream = false;
   mHandle->mNumInputFrames = -1;  // 1st two buffers contain SPS and PPS
   if (encode_info.strict_rc_window > MAX_FRAME_WINDOW)
      encode_info.strict_rc_window = MAX_FRAME_WINDOW;
@@ -871,6 +889,7 @@ encoding_metadata_t vl_multi_encoder_generate_header(vl_codec_handle_t codec_han
   VPMultiEncHandle* handle = (VPMultiEncHandle *)codec_handle;
   encoding_metadata_t result;
   memset(&result, 0, sizeof(encoding_metadata_t));
+  result.input_frame_num = -1;
 
   if (!handle->mSpsPpsHeaderReceived) {
     ret = AML_MultiEncHeader(handle->am_enc_handle, (unsigned char*)pHeader,
@@ -925,6 +944,7 @@ encoding_metadata_t vl_multi_encoder_encode(vl_codec_handle_t codec_handle,
   encoding_metadata_t result;
 
   memset(&result, 0, sizeof(encoding_metadata_t));
+  result.input_frame_num = -1;
 
 #if ENCODE_TIME_OUTER
   gettimeofday(&start_test, NULL);
@@ -1185,13 +1205,14 @@ encoding_metadata_t vl_multi_encoder_encode(vl_codec_handle_t codec_handle,
     VLOG(NONE, "AML_MultiEnc ret %d,  dataLength %d\n",
          ret,dataLength);
     if (ret == AMVENC_PICTURE_READY) {
-      if ((videoRet.encoded_frame_type == 0) ||  handle->mNumInputFrames == 1){
+      if ((videoRet.encoded_frame_type == 0) || !handle->mHeaderPrependedToStream){
         if ((handle->mPrependSPSPPSToIDRFrames ||
-             handle->mNumInputFrames == 1) &&
+             !handle->mHeaderPrependedToStream) &&
             (handle->mSPSPPSData)) {
           memmove(out + handle->mSPSPPSDataSize, out, dataLength);
           memcpy(out, handle->mSPSPPSData, handle->mSPSPPSDataSize);
           dataLength += handle->mSPSPPSDataSize;
+          handle->mHeaderPrependedToStream = true;
           VLOG(DEBUG, "copy mSPSPPSData to buffer size= %d\n",handle->mSPSPPSDataSize);
         }
         result.is_key_frame = true;
@@ -1221,6 +1242,8 @@ encoding_metadata_t vl_multi_encoder_encode(vl_codec_handle_t codec_handle,
       result.extra.intra_blocks = videoRet.enc_intra_blocks;
       result.extra.merged_blocks = videoRet.enc_merged_blocks;
       result.extra.skipped_blocks = videoRet.enc_skipped_blocks;
+      result.timestamp_us = (int) videoRet.coding_timestamp;
+      result.input_frame_num = (int) videoRet.disp_order;
     } else if ((ret == AMVENC_SKIPPED_PICTURE) || (ret == AMVENC_TIMEOUT)) {
       dataLength = 0;
       if (ret == AMVENC_TIMEOUT) {
