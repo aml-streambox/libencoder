@@ -538,6 +538,9 @@ static BOOL SetupEncoderOpenParam(EncOpenParam *pEncOP, AMVEncInitParams* InitPa
   if (InitParam->lossless_enable > 0) {
     if (pEncOP->bitstreamFormat == STD_HEVC) {
       param->losslessEnable = 1;
+      // FIX: Set Main RExt profile for lossless encoding
+      param->profile = HEVC_PROFILE_MAINREXT;
+      VLOG(INFO, "HEVC Lossless mode enabled: profile set to Main RExt (%d)\n", param->profile);
     } else {
       VLOG(ERR, "[ERROR] Lossless encoding is HEVC-only feature, not supported for H.264\n");
       param->losslessEnable = 0;
@@ -554,6 +557,11 @@ static BOOL SetupEncoderOpenParam(EncOpenParam *pEncOP, AMVEncInitParams* InitPa
     param->roiEnable = 0;
     param->bgDetectEnable = 0;
     param->skipIntraTrans = 1;
+    // FIX: Force QP to 0 for lossless encoding
+    param->initialRcQp = 0;
+    param->intraQP = 0;
+    VLOG(INFO, "HEVC Lossless mode: QP forced to 0 (initialRcQp=%d, intraQP=%d)\n",
+         param->initialRcQp, param->intraQP);
   }
   param->constIntraPredFlag = 0;
   param->lfCrossSliceBoundaryEnable = 1;
@@ -940,8 +948,15 @@ static BOOL SetupEncoderOpenParam(EncOpenParam *pEncOP, AMVEncInitParams* InitPa
 
   if (InitParam->es_buf_sz)
     pEncOP->streamBufSize = InitParam->es_buf_sz;
-  else
+  else {
     pEncOP->streamBufSize  = ENC_STREAM_BUF_SIZE;
+    /* FIX: For lossless encoding, increase stream buffer size 3-5x */
+    if (InitParam->lossless_enable > 0 && pEncOP->bitstreamFormat == STD_HEVC) {
+        pEncOP->streamBufSize = ENC_STREAM_BUF_SIZE * 4; // 4x for lossless
+        VLOG(INFO, "HEVC Lossless mode: stream buffer size increased to %d (4x default)\n",
+             pEncOP->streamBufSize);
+    }
+  }
 
   if (pEncOP->streamBufCount < COMMAND_QUEUE_DEPTH )
     pEncOP->streamBufCount = COMMAND_QUEUE_DEPTH; //for encoder->numSinkPortQueue
@@ -1560,9 +1575,16 @@ amv_enc_handle_t AML_MultiEncInitialize(AMVEncInitParams* encParam)
     ctx->cyclePerTick = 256;
   /* prepare stream buffers */
   if (encParam->es_buf_sz)
-       ctx->bsBuffer[0].size = encParam->es_buf_sz; //ENC_STREAM_BUF_SIZE;
-  else
+       ctx->bsBuffer[0].size = encParam->es_buf_sz; // user-specified buffer size
+  else {
        ctx->bsBuffer[0].size = ENC_STREAM_BUF_SIZE; // default value
+       /* FIX: For lossless encoding, increase buffer size 3-5x to handle larger output */
+       if (encParam->lossless_enable > 0 && encParam->stream_type == AMV_HEVC) {
+           ctx->bsBuffer[0].size = ENC_STREAM_BUF_SIZE * 4; // 4x buffer for lossless
+           VLOG(INFO, "HEVC Lossless mode: buffer size increased to %u (4x default)\n",
+                ctx->bsBuffer[0].size);
+       }
+  }
   if (vdi_allocate_dma_memory(coreIdx, &ctx->bsBuffer[0], ENC_BS, 0) < 0) {
     VLOG(ERR, "fail to allocate bitstream buffer\n");
     ctx->bsBuffer[0].size = 0;
@@ -1596,6 +1618,14 @@ amv_enc_handle_t AML_MultiEncInitialize(AMVEncInitParams* encParam)
          ctx->encOpenParam.bitstreamBuffer,
          ctx->encOpenParam.bitstreamBufferSize,
          ctx->encOpenParam.rcEnable);
+    /* FIX: Detailed lossless error logging for debugging */
+    if (encParam->lossless_enable > 0) {
+        EncVpParam *param = &ctx->encOpenParam.EncStdParam.vpParam;
+        VLOG(ERR, "LOSSLESS ERROR: losslessEnable=%d profile=%d initialRcQp=%d intraQP=%d rcEnable=%d\n",
+             param->losslessEnable, param->profile, param->initialRcQp, param->intraQP, ctx->encOpenParam.rcEnable);
+        VLOG(ERR, "LOSSLESS ERROR: HEVC requires Main RExt profile (4), QP=0, and rcEnable=0\n");
+        VLOG(ERR, "LOSSLESS ERROR: Check that HEVC_PROFILE_MAINREXT=4 is defined in vpuapi.h\n");
+    }
     ctx->enchandle = NULL;
     goto fail_exit;
   }
