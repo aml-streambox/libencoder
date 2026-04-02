@@ -183,7 +183,7 @@ int vdi_init(u32 core_idx)
     pthread_mutex_lock(&vid_mutex);
     if (vdi_init_flag[core_idx] == INIT_VDI_STAT_NULL) {
         vdi_init_flag[core_idx] = INIT_VDI_STAT_INIT;
-        memset(&s_vdi_info[core_idx], 0x00, sizeof(s_vdi_info));
+        memset(&s_vdi_info[core_idx], 0x00, sizeof(vdi_info_t));
         s_vdi_info[core_idx].vpu_fd = -1;
     }
 

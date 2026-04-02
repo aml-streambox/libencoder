@@ -289,18 +289,16 @@ typedef struct AMVEncContext_s {
   uint32 ge2d_initial_done;
   aml_ge2d_t amlge2d;
   bool INIT_GE2D;
+  int SRC1_PIXFORMAT;
+  int SRC2_PIXFORMAT;
+  int DST_PIXFORMAT;
+  GE2DOP ge2d_op;
 #endif
 } AMVMultiCtx;
 
 
 #if SUPPORT_SCALE
-static int SRC1_PIXFORMAT = PIXEL_FORMAT_YCrCb_420_SP;
-static int SRC2_PIXFORMAT = PIXEL_FORMAT_YCrCb_420_SP;
-static int DST_PIXFORMAT = PIXEL_FORMAT_YCrCb_420_SP;
-
-static GE2DOP OP = AML_GE2D_STRETCHBLIT;
-
-static int do_strechblit(aml_ge2d_info_t* pge2dinfo, AMVMultiEncFrameIO* input) {
+static int do_strechblit(aml_ge2d_info_t* pge2dinfo, AMVMultiEncFrameIO* input, AMVMultiCtx* ctx) {
   int ret = -1;
   char code = 0;
   VLOG(INFO, "do_strechblit test case:\n");
@@ -308,7 +306,7 @@ static int do_strechblit(aml_ge2d_info_t* pge2dinfo, AMVMultiEncFrameIO* input) 
   pge2dinfo->dst_info.memtype = GE2D_CANVAS_ALLOC;
   pge2dinfo->src_info[0].canvas_w = input->pitch;   // SX_SRC1;
   pge2dinfo->src_info[0].canvas_h = input->height;  // SY_SRC1;
-  pge2dinfo->src_info[0].format = SRC1_PIXFORMAT;
+  pge2dinfo->src_info[0].format = ctx->SRC1_PIXFORMAT;
   if ((input->scale_width != 0) && (input->scale_height != 0)) {
     pge2dinfo->dst_info.canvas_w = input->scale_width;   // SX_DST;
     pge2dinfo->dst_info.canvas_h = input->scale_height;  // SY_DST;
@@ -318,7 +316,7 @@ static int do_strechblit(aml_ge2d_info_t* pge2dinfo, AMVMultiEncFrameIO* input) 
     pge2dinfo->dst_info.canvas_h =
         input->height - input->crop_top - input->crop_bottom;
   }
-  pge2dinfo->dst_info.format = DST_PIXFORMAT;
+  pge2dinfo->dst_info.format = ctx->DST_PIXFORMAT;
 
   pge2dinfo->src_info[0].rect.x = input->crop_left;
   pge2dinfo->src_info[0].rect.y = input->crop_top;
@@ -343,25 +341,26 @@ static int do_strechblit(aml_ge2d_info_t* pge2dinfo, AMVMultiEncFrameIO* input) 
 }
 
 static void set_ge2dinfo(aml_ge2d_info_t* pge2dinfo,
-                         AMVEncInitParams* encParam) {
+                         AMVEncInitParams* encParam,
+                         AMVMultiCtx* ctx) {
   pge2dinfo->src_info[0].memtype = GE2D_CANVAS_ALLOC;
   pge2dinfo->src_info[0].canvas_w = encParam->src_width;   // SX_SRC1;
   pge2dinfo->src_info[0].canvas_h = encParam->src_height;  // SY_SRC1;
-  pge2dinfo->src_info[0].format = SRC1_PIXFORMAT;
+  pge2dinfo->src_info[0].format = ctx->SRC1_PIXFORMAT;
   //pge2dinfo->src_info[0].plane_number = 1;
   pge2dinfo->src_info[1].memtype = GE2D_CANVAS_TYPE_INVALID;
   pge2dinfo->src_info[1].canvas_w = 0;
   pge2dinfo->src_info[1].canvas_h = 0;
-  pge2dinfo->src_info[1].format = SRC2_PIXFORMAT;
+  pge2dinfo->src_info[1].format = ctx->SRC2_PIXFORMAT;
   //pge2dinfo->src_info[1].plane_number = 1;
   pge2dinfo->dst_info.memtype = GE2D_CANVAS_ALLOC;
   pge2dinfo->dst_info.canvas_w = vp_align32(encParam->width);//encParam->width;   // SX_DST;
   pge2dinfo->dst_info.canvas_h = encParam->height;  // SY_DST;
-  pge2dinfo->dst_info.format = DST_PIXFORMAT;
+  pge2dinfo->dst_info.format = ctx->DST_PIXFORMAT;
   pge2dinfo->dst_info.rotation = GE2D_ROTATION_0;
   //pge2dinfo->dst_info.plane_number = 1;
   pge2dinfo->offset = 0;
-  pge2dinfo->ge2d_op = OP;
+  pge2dinfo->ge2d_op = ctx->ge2d_op;
   pge2dinfo->blend_mode = BLEND_MODE_PREMULTIPLIED;
 }
 #endif
@@ -1393,15 +1392,15 @@ static void SetCustMapData(AMVMultiCtx *ctx, EncParam *encParam, unsigned long a
 }
 
 #if SUPPORT_SCALE
-AMVEnc_Status ge2d_colorFormat(AMVEncFrameFmt format) {
+AMVEnc_Status ge2d_colorFormat(AMVMultiCtx *ctx, AMVEncFrameFmt format) {
     switch (format) {
         case AMVENC_RGB888:
-            SRC1_PIXFORMAT = PIXEL_FORMAT_RGB_888;
-            SRC2_PIXFORMAT = PIXEL_FORMAT_RGB_888;
+            ctx->SRC1_PIXFORMAT = PIXEL_FORMAT_RGB_888;
+            ctx->SRC2_PIXFORMAT = PIXEL_FORMAT_RGB_888;
             return AMVENC_SUCCESS;
         case AMVENC_RGBA8888:
-            SRC1_PIXFORMAT = PIXEL_FORMAT_RGBA_8888;
-            SRC2_PIXFORMAT = PIXEL_FORMAT_RGBA_8888;
+            ctx->SRC1_PIXFORMAT = PIXEL_FORMAT_RGBA_8888;
+            ctx->SRC2_PIXFORMAT = PIXEL_FORMAT_RGBA_8888;
             return AMVENC_SUCCESS;
         default:
             VLOG(ERR, "not support color format!");
@@ -1426,6 +1425,14 @@ amv_enc_handle_t AML_MultiEncInitialize(AMVEncInitParams* encParam)
   }
 
   memset(ctx, 0, sizeof(AMVMultiCtx));
+
+#if SUPPORT_SCALE
+  ctx->SRC1_PIXFORMAT = PIXEL_FORMAT_YCrCb_420_SP;
+  ctx->SRC2_PIXFORMAT = PIXEL_FORMAT_YCrCb_420_SP;
+  ctx->DST_PIXFORMAT = PIXEL_FORMAT_YCrCb_420_SP;
+  ctx->ge2d_op = AML_GE2D_STRETCHBLIT;
+#endif
+
   ctx->magic_num = MULTI_ENC_MAGIC;
 
   ctx->instance_id = 0;
@@ -1579,7 +1586,7 @@ amv_enc_handle_t AML_MultiEncInitialize(AMVEncInitParams* encParam)
         memset(&(pge2dinfo->src_info[1]), 0, sizeof(buffer_info_t));
         memset(&(pge2dinfo->dst_info), 0, sizeof(buffer_info_t));
 
-        set_ge2dinfo(pge2dinfo, encParam);
+        set_ge2dinfo(pge2dinfo, encParam, ctx);
 
         int ret = aml_ge2d_init(&ctx->amlge2d);
         if (ret < 0) {
@@ -1675,15 +1682,15 @@ AMVEnc_Status AML_MultiEncSetInput(amv_enc_handle_t ctx_handle,
   ctx->fmt = input->fmt;
   if (ctx->fmt != AMVENC_NV12 && ctx->fmt != AMVENC_NV21 && ctx->fmt != AMVENC_YUV420P && ctx->fmt != AMVENC_P010) {
 #if SUPPORT_SCALE
-        if (ctx->INIT_GE2D) {
-            if (ge2d_colorFormat(ctx->fmt) == AMVENC_SUCCESS) {
-                VLOG(DEBUG, "The %d of color format that HEVC need ge2d to change!", ctx->fmt);
-            } else
-            {
-                VLOG(INFO, "Encoder only support NV12/NV21, not support %d", ctx->fmt);
-                return AMVENC_NOT_SUPPORTED;
-            }
+    if (ctx->INIT_GE2D) {
+        if (ge2d_colorFormat(ctx, ctx->fmt) == AMVENC_SUCCESS) {
+            VLOG(DEBUG, "The %d of color format that HEVC need ge2d to change!", ctx->fmt);
+        } else
+        {
+            VLOG(INFO, "Encoder only support NV12/NV21, not support %d", ctx->fmt);
+            return AMVENC_NOT_SUPPORTED;
         }
+    }
 #else
       VLOG(INFO, "Encoder only support NV12/NV21, not support %d", ctx->fmt);
       return AMVENC_NOT_SUPPORTED;
@@ -1760,8 +1767,8 @@ AMVEnc_Status AML_MultiEncSetInput(amv_enc_handle_t ctx_handle,
         if (ctx->INIT_GE2D) {
             ctx->INIT_GE2D = false;
 
-            ctx->amlge2d.ge2dinfo.src_info[0].format = SRC1_PIXFORMAT;
-            ctx->amlge2d.ge2dinfo.src_info[1].format = SRC2_PIXFORMAT;
+            ctx->amlge2d.ge2dinfo.src_info[0].format = ctx->SRC1_PIXFORMAT;
+            ctx->amlge2d.ge2dinfo.src_info[1].format = ctx->SRC2_PIXFORMAT;
             ctx->amlge2d.ge2dinfo.src_info[0].plane_number = 1;
             ctx->amlge2d.ge2dinfo.dst_info.plane_number = 1;
             int ret = aml_ge2d_mem_alloc(&ctx->amlge2d);
@@ -1796,7 +1803,7 @@ AMVEnc_Status AML_MultiEncSetInput(amv_enc_handle_t ctx_handle,
         memcpy((void *)ctx->amlge2d.ge2dinfo.src_info[0].vaddr[0], (void *)input->YCbCr[0], input->pitch * input->height * 3);
       }
 
-      do_strechblit(&ctx->amlge2d.ge2dinfo, input);
+      do_strechblit(&ctx->amlge2d.ge2dinfo, input, ctx);
       aml_ge2d_invalid_cache(&ctx->amlge2d.ge2dinfo);
       size_src_luma = luma_stride * vp_align32(ctx->enc_height);
       //        size_src_chroma = luma_stride * (vp_align16(ctx->enc_height) / 2);
@@ -1886,8 +1893,8 @@ AMVEnc_Status AML_MultiEncSetInput(amv_enc_handle_t ctx_handle,
     if (ctx->fmt != AMVENC_NV12 && ctx->fmt != AMVENC_NV21 && ctx->fmt != AMVENC_YUV420P && ctx->fmt != AMVENC_P010) {
         if (ctx->INIT_GE2D) {
             ctx->INIT_GE2D = false;
-            ctx->amlge2d.ge2dinfo.src_info[0].format = SRC1_PIXFORMAT;
-            ctx->amlge2d.ge2dinfo.src_info[1].format = SRC2_PIXFORMAT;
+            ctx->amlge2d.ge2dinfo.src_info[0].format = ctx->SRC1_PIXFORMAT;
+            ctx->amlge2d.ge2dinfo.src_info[1].format = ctx->SRC2_PIXFORMAT;
             ctx->amlge2d.ge2dinfo.dst_info.plane_number = 1;
             int ret = aml_ge2d_mem_alloc(&ctx->amlge2d);
             if (ret < 0) {
@@ -1898,7 +1905,7 @@ AMVEnc_Status AML_MultiEncSetInput(amv_enc_handle_t ctx_handle,
         }
         ctx->amlge2d.ge2dinfo.src_info[0].shared_fd[0] = input->shared_fd[0];
 
-        do_strechblit(&ctx->amlge2d.ge2dinfo, input);
+      do_strechblit(&ctx->amlge2d.ge2dinfo, input, ctx);
         aml_ge2d_invalid_cache(&ctx->amlge2d.ge2dinfo);
 
         ctx->pFbSrc[idx].dma_shared_fd[0] = ctx->amlge2d.ge2dinfo.dst_info.shared_fd[0];
@@ -2397,6 +2404,7 @@ AMVEnc_Status AML_MultiEncNAL(amv_enc_handle_t ctx_handle,
   ENC_QUERY_WRPTR_SEL     encWrPtrSel     = GET_ENC_PIC_DONE_WRPTR;
   int retry_cnt = 0;
   int idx;
+  int retry_point_cnt = 0;  // Retry counter for retry_point label
   QueueStatusInfo         qStatus;
   AMVMultiCtx * ctx = (AMVMultiCtx* ) ctx_handle;
   if (ctx == NULL) return AMVENC_FAIL;
@@ -2407,6 +2415,10 @@ AMVEnc_Status AML_MultiEncNAL(amv_enc_handle_t ctx_handle,
 #endif
 
 retry_point:
+    if (++retry_point_cnt > 100) {
+        VLOG(ERR, "VPU_EncStartOneFrame exceeded maximum retries (100), failing\n");
+        return AMVENC_FAIL;
+    }
     if(ctx ->param_change_flag) {
         result = VPU_EncGiveCommand(ctx->enchandle, ENC_SET_PARA_CHANGE, &ctx->changeParam);
         if (result == RETCODE_SUCCESS) {
@@ -2636,9 +2648,14 @@ flush_retry_point:
         }
         else if (result == RETCODE_QUEUEING_FAILURE) { // Just retry
             QueueStatusInfo qStatus;
+            int flush_retry_point_cnt = 0;  // Retry counter for flush_retry_point
             // Just retry
             VPU_EncGiveCommand(ctx->enchandle, ENC_GET_QUEUE_STATUS, (void*)&qStatus);
             if (qStatus.instanceQueueCount == 0) {
+                if (++flush_retry_point_cnt > 100) {
+                    VLOG(ERR, "VPU_EncStartOneFrame flush exceeded maximum retries (100), failing\n");
+                    //return AMVENC_FAIL;
+                }
                 goto flush_retry_point;//return TRUE;
             }
         }
