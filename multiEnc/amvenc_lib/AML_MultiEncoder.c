@@ -238,7 +238,6 @@ typedef struct AMVEncContext_s {
   Uint32                      customLambda[NUM_CUSTOM_LAMBDA];
   UserScalingList             scalingList;
   vpu_buffer_t                vbCustomMap[MAX_REG_FRAME];
-  EncoderState                state;
   EncInitialInfo              initialInfo;
   EncParam                    encParam;
   Int32                       encodedSrcFrmIdxArr[ENC_SRC_BUF_NUM];
@@ -248,7 +247,9 @@ typedef struct AMVEncContext_s {
   Uint32                      changedCount;
   Uint64                      startTimeout;
   Uint32                      cyclePerTick;
-
+  AMVEnc_State                state;  /* Per-instance encoder state */
+  Uint32                      force_idr_on_next_frame;  /* Force IDR after VLC_BUF_FULL */
+  Uint32                      error_count;  /* Track consecutive errors */
 
   Uint32                      reconFbStride;
   Uint32                      reconFbHeight;
@@ -296,6 +297,86 @@ typedef struct AMVEncContext_s {
 #endif
 } AMVMultiCtx;
 
+/*
+ * State transition validation and logging helper
+ * Returns: TRUE if transition is valid, FALSE otherwise
+ */
+static BOOL SetEncoderState(AMVMultiCtx* ctx, AMVEnc_State newState, const char* func, int line)
+{
+    AMVEnc_State oldState = ctx->state;
+    BOOL valid = TRUE;
+
+    /* Define valid state transitions */
+    switch (oldState) {
+        case AMVEnc_Initializing:
+            valid = (newState == AMVEnc_Encoding_SPS || 
+                     newState == AMVEnc_Analyzing_Frame ||
+                     newState == AMVEnc_WaitingForBuffer);
+            break;
+        case AMVEnc_Encoding_SPS:
+            valid = (newState == AMVEnc_Encoding_PPS || 
+                     newState == AMVEnc_Analyzing_Frame ||
+                     newState == AMVEnc_WaitingForBuffer);
+            break;
+        case AMVEnc_Encoding_PPS:
+            valid = (newState == AMVEnc_Analyzing_Frame || 
+                     newState == AMVEnc_WaitingForBuffer ||
+                     newState == AMVEnc_Encoding_Frame);
+            break;
+        case AMVEnc_Analyzing_Frame:
+            valid = (newState == AMVEnc_WaitingForBuffer || 
+                     newState == AMVEnc_Encoding_Frame);
+            break;
+        case AMVEnc_WaitingForBuffer:
+            valid = (newState == AMVEnc_Encoding_Frame || 
+                     newState == AMVEnc_Analyzing_Frame);
+            break;
+        case AMVEnc_Encoding_Frame:
+            valid = (newState == AMVEnc_Analyzing_Frame || 
+                     newState == AMVEnc_WaitingForBuffer ||
+                     newState == AMVEnc_Encoding_Frame); /* Can stay in encoding frame */
+            break;
+        default:
+            /* Unknown state - allow transition but log warning */
+            VLOG(WARN, "[%s:%d] Unknown encoder state %d, allowing transition to %d\n", 
+                 func, line, oldState, newState);
+            valid = TRUE;
+            break;
+    }
+
+    if (!valid) {
+        VLOG(WARN, "[%s:%d] Invalid state transition: %d -> %d (instance %d)\n",
+             func, line, oldState, newState, ctx->instance_id);
+    }
+
+    ctx->state = newState;
+    VLOG(INFO, "[%s:%d] Instance %d state: %d -> %d\n", 
+         func, line, ctx->instance_id, oldState, newState);
+    
+    return valid;
+}
+
+/*
+ * Per-instance error handling - close the encoder instance instead of SW reset
+ */
+static void HandleInstanceError(AMVMultiCtx* ctx, const char* func, int line)
+{
+    VLOG(ERR, "[%s:%d] Instance %d error handler - closing encoder instance\n",
+         func, line, ctx->instance_id);
+    
+    /* Set state to ERROR */
+    ctx->state = AMVEnc_Initializing; /* Reset to initial state */
+    ctx->error_count++;
+    
+    /* Close only this instance */
+    if (ctx->enchandle) {
+        VPU_EncClose(ctx->enchandle);
+        ctx->enchandle = NULL;
+    }
+    
+    VLOG(ERR, "[%s:%d] Instance %d encoder closed, error_count=%d\n",
+         func, line, ctx->instance_id, ctx->error_count);
+}
 
 #if SUPPORT_SCALE
 static int do_strechblit(aml_ge2d_info_t* pge2dinfo, AMVMultiEncFrameIO* input, AMVMultiCtx* ctx) {
@@ -1438,6 +1519,9 @@ amv_enc_handle_t AML_MultiEncInitialize(AMVEncInitParams* encParam)
   ctx->instance_id = 0;
   ctx->src_idx = 0;
   ctx->enc_counter = 0;
+  ctx->state = AMVEnc_Initializing;
+  ctx->force_idr_on_next_frame = 0;
+  ctx->error_count = 0;
   ctx->enc_width = encParam->width;
   ctx->enc_height = encParam->height;
   // copy a backup on initial parameter
@@ -1597,6 +1681,10 @@ amv_enc_handle_t AML_MultiEncInitialize(AMVEncInitParams* encParam)
         ctx->INIT_GE2D = true;
     }
 #endif
+  /* Set initial state after successful initialization */
+  SetEncoderState(ctx, AMVEnc_Analyzing_Frame, __FUNCTION__, __LINE__);
+  VLOG(INFO, "Instance %d encoder initialized successfully\n", ctx->instance_id);
+  
   return (amv_enc_handle_t) ctx;
 fail_exit:
   if (ctx->enchandle)
@@ -2214,8 +2302,8 @@ AMVEnc_Status AML_MultiEncChangeMutiSlice(amv_enc_handle_t ctx_handle,
 
 
 AMVEnc_Status AML_MultiEncHeader(amv_enc_handle_t ctx_handle,
-                                unsigned char* buffer,
-                                unsigned int* buf_nal_size)
+                                 unsigned char* buffer,
+                                 unsigned int* buf_nal_size)
 {
   EncHeaderParam encHeaderParam;
   EncOutputInfo  encOutputInfo;
@@ -2231,6 +2319,14 @@ AMVEnc_Status AML_MultiEncHeader(amv_enc_handle_t ctx_handle,
 
   if (ctx == NULL) return AMVENC_FAIL;
   if (ctx->magic_num != MULTI_ENC_MAGIC) return AMVENC_FAIL;
+  
+  /* Validate and update state for header encoding */
+  if (ctx->state != AMVEnc_Initializing && ctx->state != AMVEnc_Analyzing_Frame) {
+      VLOG(WARN, "[%s:%d] Instance %d unexpected state %d for header encoding\n",
+           __FUNCTION__, __LINE__, ctx->instance_id, ctx->state);
+  }
+  SetEncoderState(ctx, AMVEnc_Encoding_SPS, __FUNCTION__, __LINE__);
+  
   //EncHandle handle = ctx->enchandle;
   memset(&encHeaderParam, 0x00, sizeof(EncHeaderParam));
 
@@ -2299,7 +2395,7 @@ retry_point:
         if (retry++ < 20) break;
         VLOG(ERR, "INSTANCE #%d INTERRUPT TIMEOUT\n", ctx->enchandle->instIndex);
         HandleEncoderError(ctx->enchandle, ctx->frameIdx, NULL);
-        VPU_SWReset(ctx->encOpenParam.coreIdx, SW_RESET_SAFETY, ctx->enchandle);
+        HandleInstanceError(ctx, __FUNCTION__, __LINE__);
         return AMVENC_TIMEOUT;
     } else {
         VLOG(ERR, "Unknown interrupt status: %d\n",status);
@@ -2333,6 +2429,11 @@ retry_point:
     }
     else if (encOutputInfo.result == RETCODE_VLC_BUF_FULL) {
         VLOG(ERR, "VLC BUFFER FULL!!! ALLOCATE MORE TASK BUFFER(%d)!!!\n", ONE_TASKBUF_SIZE_FOR_CQ);
+        /* Set flag to force IDR on next frame and return error for current frame */
+        ctx->force_idr_on_next_frame = 1;
+        VLOG(INFO, "Instance %d: VLC_BUF_FULL in header, forcing IDR on next frame\n", ctx->instance_id);
+        HandleInstanceError(ctx, __FUNCTION__, __LINE__);
+        return AMVENC_SPS_FAIL;
     }
     else if (encOutputInfo.result != RETCODE_SUCCESS) {
         /* ERROR */
@@ -2340,7 +2441,7 @@ retry_point:
         if ( retry++ >100) {
            VLOG(ERR, "HEADER RETRY failed reset\n");
            HandleEncoderError(ctx->enchandle, encOutputInfo.encPicCnt, &encOutputInfo);
-           VPU_SWReset(ctx->encOpenParam.coreIdx, SW_RESET_SAFETY, ctx->enchandle);
+           HandleInstanceError(ctx, __FUNCTION__, __LINE__);
            return AMVENC_SPS_FAIL;
         }
         goto retry_point;
@@ -2378,6 +2479,9 @@ retry_point:
         ctx->bsBuffer[0].phys_addr, buffer, header_size,
         ctx->encOpenParam.streamEndian);
 
+  /* Update state after successful header encoding */
+  SetEncoderState(ctx, AMVEnc_Analyzing_Frame, __FUNCTION__, __LINE__);
+
   return AMVENC_SUCCESS;
 }
 
@@ -2409,6 +2513,19 @@ AMVEnc_Status AML_MultiEncNAL(amv_enc_handle_t ctx_handle,
   AMVMultiCtx * ctx = (AMVMultiCtx* ) ctx_handle;
   if (ctx == NULL) return AMVENC_FAIL;
   if (ctx->magic_num != MULTI_ENC_MAGIC) return AMVENC_FAIL;
+
+  /* Check if we need to force IDR due to previous VLC_BUF_FULL */
+  if (ctx->force_idr_on_next_frame) {
+      VLOG(INFO, "Instance %d: Forcing IDR due to previous VLC_BUF_FULL\n", ctx->instance_id);
+      ctx->force_idr_on_next_frame = 0;
+  }
+
+  /* Validate and update state for frame encoding */
+  if (ctx->state != AMVEnc_Analyzing_Frame && ctx->state != AMVEnc_Encoding_Frame) {
+      VLOG(WARN, "[%s:%d] Instance %d unexpected state %d for frame encoding\n",
+           __FUNCTION__, __LINE__, ctx->instance_id, ctx->state);
+  }
+  SetEncoderState(ctx, AMVEnc_Encoding_Frame, __FUNCTION__, __LINE__);
 
 #if ENCODE_TIME_STATISTICS
   gettimeofday(&start_test, NULL);
@@ -2473,8 +2590,8 @@ retry_point:
 retry_pointB:
   while (retry_cnt++ < 100) {
     if ((intStatus=HandlingInterruptFlag(ctx)) == ENC_INT_STATUS_TIMEOUT) {
-        VPU_SWReset(ctx->encOpenParam.coreIdx, SW_RESET_SAFETY, ctx->enchandle);
-        VLOG(ERR, "Timeout of encoder interrupt reset \n");
+        HandleInstanceError(ctx, __FUNCTION__, __LINE__);
+        VLOG(ERR, "Timeout of encoder interrupt, instance closed\n");
        return AMVENC_FAIL;
     }
     else if (intStatus == ENC_INT_STATUS_FULL || intStatus == ENC_INT_STATUS_LOW_LATENCY) {
@@ -2513,13 +2630,17 @@ retry_pointB:
     }
     else if (encOutputInfo.result == RETCODE_VLC_BUF_FULL) {
         VLOG(ERR, "VLC BUFFER FULL!!! ALLOCATE MORE TASK BUFFER(%d)!!!\n", ONE_TASKBUF_SIZE_FOR_CQ);
+        /* Set flag to force IDR on next frame and skip corrupted output */
+        ctx->force_idr_on_next_frame = 1;
+        VLOG(INFO, "Instance %d: VLC_BUF_FULL in NAL, forcing IDR on next frame, returning error\n", ctx->instance_id);
+        return AMVENC_FAIL;
     }
     else if (encOutputInfo.result != RETCODE_SUCCESS) {
         /* ERROR */
         VLOG(ERR, "Failed to encode error = %d 0x%x\n", encOutputInfo.result, encOutputInfo.errorReason);
         ChekcAndPrintDebugInfo(ctx->enchandle, TRUE, encOutputInfo.result);
         HandleEncoderError(ctx->enchandle, encOutputInfo.encPicCnt, &encOutputInfo);
-        VPU_SWReset(ctx->encOpenParam.coreIdx, SW_RESET_SAFETY, ctx->enchandle);
+        HandleInstanceError(ctx, __FUNCTION__, __LINE__);
         return AMVENC_FAIL;
     }
     else {
@@ -2613,6 +2734,9 @@ retry_pointB:
     VLOG(WARN, "%p#Encode slice time : %lu us, frame index : %llu",
         ctx_handle, encode_time_per_frame, total_encode_frames);
 #endif
+
+    /* Update state after successful frame encoding */
+    SetEncoderState(ctx, AMVEnc_Analyzing_Frame, __FUNCTION__, __LINE__);
 
     VLOG(INFO, "Done one picture !! \n");
     return AMVENC_PICTURE_READY;
