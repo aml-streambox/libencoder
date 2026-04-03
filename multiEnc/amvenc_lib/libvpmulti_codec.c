@@ -67,6 +67,7 @@ static struct timeval end_test;
 #define H264_HEADER_LEN 5
 #define H265_HEADER_LEN 6
 #define GET_DROPPABLE_P 1
+
 #if defined(__ANDROID__)
 #define LOG_LINE() ALOGD("[%s:%d]\n", __FUNCTION__, __LINE__)
 #endif
@@ -147,6 +148,26 @@ typedef struct vp_multi_s {
   int hist_skip_thresh;
   VPMultiVuiInfo vui_info;
 } VPMultiEncHandle;
+
+static bool
+vl_multi_encoder_is_low_delay_gop(const VPMultiEncHandle *handle)
+{
+    if (handle->mEncParams.gop_pattern > 0) {
+        switch (handle->mEncParams.gop_pattern) {
+            case 3: /* IBBB */
+            case 5: /* IPPPP */
+            case 6: /* IBBBB */
+            case 8: /* IPP_SINGLE */
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    return (handle->mEncParams.GopPreset == GOP_OPT_NONE ||
+            handle->mEncParams.GopPreset == GOP_IP ||
+            handle->mEncParams.GopPreset == GOP_IP_SVC5);
+}
 
 static int64_t GetNowUs() {
     struct timeval tv;
@@ -264,9 +285,9 @@ AMVEnc_Status initEncParams(VPMultiEncHandle *handle,
                 ((encode_info.enc_feature_opts >>2) & 0x1f);
     }
 
-    /* Newer GStreamer userspace passes gop_pattern directly. Mirror it into
-     * the legacy GopPreset field too so VPU_EncInstParamSync() gets a
-     * consistent non-zero preset for B-frame paths. */
+    /* Newer GStreamer userspace passes gop_pattern directly. Mirror the
+     * presets that have an equivalent legacy GopPreset value so any older
+     * compatibility checks see a sensible fallback too. */
     if (encode_info.gop_pattern > 0) {
         switch (encode_info.gop_pattern) {
             case 1:
@@ -274,6 +295,9 @@ AMVEnc_Status initEncParams(VPMultiEncHandle *handle,
                 break;
             case 4:
                 handle->mEncParams.GopPreset = GOP_ALL_I;
+                break;
+            case 8:
+                handle->mEncParams.GopPreset = GOP_IP_CUSTP_REF_ONE;
                 break;
             default:
                 break;
@@ -518,9 +542,7 @@ int vl_multi_encoder_adjust_h264_sps(VPMultiEncHandle* handle,char *sps_nalu,int
 
     if ((!handle->vui_info.vui_parameters_present_flag) &&
         (!((handle->mEncParams.idr_period != 1) &&
-        ((handle->mEncParams.GopPreset == GOP_OPT_NONE) ||
-        (handle->mEncParams.GopPreset == GOP_IP) ||
-        (handle->mEncParams.GopPreset == GOP_IP_SVC5))))) {
+        vl_multi_encoder_is_low_delay_gop(handle)))) {
         VLOG(INFO,"vui_parameters_present_flag is false,do not add vui info");
         return sps_nalu_size;
     }
@@ -529,9 +551,7 @@ int vl_multi_encoder_adjust_h264_sps(VPMultiEncHandle* handle,char *sps_nalu,int
     read_seq_parameter_set_rbsp(&sps, &bs);
     read_rbsp_trailing_bits(&bs);
     if ((handle->mEncParams.idr_period != 1) &&
-        ((handle->mEncParams.GopPreset == GOP_OPT_NONE) ||
-        (handle->mEncParams.GopPreset == GOP_IP) ||
-        (handle->mEncParams.GopPreset == GOP_IP_SVC5))) {
+        vl_multi_encoder_is_low_delay_gop(handle)) {
         sps.vui_parameters_present_flag = 1;
         sps.vui.bitstream_restriction_flag = 1;
         if (sps.vui.bitstream_restriction_flag) {

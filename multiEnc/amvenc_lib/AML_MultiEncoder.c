@@ -586,6 +586,18 @@ static BOOL SetupEncoderOpenParam(EncOpenParam *pEncOP, AMVEncInitParams* InitPa
       case 4:
         param->gopPresetIdx = PRESET_IDX_ALL_I;
         break;
+      case 5:
+        param->gopPresetIdx = PRESET_IDX_IPPPP;
+        break;
+      case 6:
+        param->gopPresetIdx = PRESET_IDX_IBBBB;
+        break;
+      case 7:
+        param->gopPresetIdx = PRESET_IDX_RA_IB;
+        break;
+      case 8:
+        param->gopPresetIdx = PRESET_IDX_IPP_SINGLE;
+        break;
       default:
         param->gopPresetIdx = PRESET_IDX_IPP;
         break;
@@ -1166,8 +1178,11 @@ static BOOL SetSequenceInfo (AMVMultiCtx* ctx)
     return FALSE;
   }
   ctx->fb_num = initialInfo->minFrameBufferCount;
-  ctx->src_num = initialInfo->minSrcFrameCount + 2
+  ctx->src_num = initialInfo->minSrcFrameCount + COMMAND_QUEUE_DEPTH
                 + EXTRA_SRC_BUFFER_NUM;
+
+  if (ctx->src_num > ENC_SRC_BUF_NUM)
+    ctx->src_num = ENC_SRC_BUF_NUM;
 
   if (ctx->encOpenParam.sourceBufCount > ctx->src_num)
     ctx->src_num = ctx->encOpenParam.sourceBufCount;
