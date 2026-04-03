@@ -55,10 +55,10 @@ typedef struct encoding_metadata_e {
   int encoded_data_length_in_bytes; /* size of the encoded buffer */
   bool is_key_frame; /* if true, the encoded frame is a keyframe */
   int timestamp_us;  /* timestamp in usec of the encode frame */
-  int input_frame_num; /* original input/display-order frame number */
   bool is_valid;     /* if true, the encoding was successful */
   enc_frame_extra_info_t extra; /* extra info of encoded frame if is_valid true */
   int err_cod; /* error code if is_valid is false: >0 normal, others error */
+  int input_frame_num; /* original input/display-order frame number */
 } encoding_metadata_t;
 
 typedef enum vl_codec_id_e {

@@ -154,9 +154,7 @@ vl_multi_encoder_is_low_delay_gop(const VPMultiEncHandle *handle)
 {
     if (handle->mEncParams.gop_pattern > 0) {
         switch (handle->mEncParams.gop_pattern) {
-            case 3: /* IBBB */
             case 5: /* IPPPP */
-            case 6: /* IBBBB */
             case 8: /* IPP_SINGLE */
                 return true;
             default:

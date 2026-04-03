@@ -248,6 +248,7 @@ typedef struct AMVEncContext_s {
   Uint64                      startTimeout;
   Uint32                      cyclePerTick;
   AMVEnc_State                state;  /* Per-instance encoder state */
+  Int32                       enc_inst_index; /* cached VPU instance index for cleanup */
   Uint32                      force_idr_on_next_frame;  /* Force IDR after VLC_BUF_FULL */
   Uint32                      error_count;  /* Track consecutive errors */
 
@@ -301,6 +302,8 @@ typedef struct AMVEncContext_s {
  * State transition validation and logging helper
  * Returns: TRUE if transition is valid, FALSE otherwise
  */
+static ENC_INT_STATUS HandlingInterruptFlag(AMVMultiCtx* ctx);
+
 static BOOL SetEncoderState(AMVMultiCtx* ctx, AMVEnc_State newState, const char* func, int line)
 {
     AMVEnc_State oldState = ctx->state;
@@ -359,6 +362,42 @@ static BOOL SetEncoderState(AMVMultiCtx* ctx, AMVEnc_State newState, const char*
 /*
  * Per-instance error handling - close the encoder instance instead of SW reset
  */
+static AMVEnc_Status CloseEncoderInstance(AMVMultiCtx* ctx, const char* func, int line)
+{
+    ENC_INT_STATUS intStatus;
+    RetCode result;
+
+    if (!ctx || !ctx->enchandle)
+        return AMVENC_SUCCESS;
+
+    while ((result = VPU_EncClose(ctx->enchandle)) == RETCODE_VPU_STILL_RUNNING) {
+        intStatus = HandlingInterruptFlag(ctx);
+        if (intStatus == ENC_INT_STATUS_TIMEOUT) {
+            HandleEncoderError(ctx->enchandle, ctx->frameIdx, NULL);
+            VLOG(ERR, "[%s:%d] Instance %d close timeout\n",
+                 func, line, ctx->instance_id);
+            return AMVENC_TIMEOUT;
+        }
+        if (intStatus == ENC_INT_STATUS_DONE) {
+            EncOutputInfo outputInfo;
+            VLOG(INFO, "[%s:%d] Instance %d close drained pending interrupt\n",
+                 func, line, ctx->instance_id);
+            VPU_EncGetOutputInfo(ctx->enchandle, &outputInfo);
+            continue;
+        }
+        osal_msleep(10);
+    }
+
+    if (result != RETCODE_SUCCESS) {
+        VLOG(ERR, "[%s:%d] Instance %d close failed ret=0x%x\n",
+             func, line, ctx->instance_id, result);
+        return AMVENC_FAIL;
+    }
+
+    ctx->enchandle = NULL;
+    return AMVENC_SUCCESS;
+}
+
 static void HandleInstanceError(AMVMultiCtx* ctx, const char* func, int line)
 {
     VLOG(ERR, "[%s:%d] Instance %d error handler - closing encoder instance\n",
@@ -369,10 +408,8 @@ static void HandleInstanceError(AMVMultiCtx* ctx, const char* func, int line)
     ctx->error_count++;
     
     /* Close only this instance */
-    if (ctx->enchandle) {
-        VPU_EncClose(ctx->enchandle);
-        ctx->enchandle = NULL;
-    }
+    if (ctx->enchandle)
+        CloseEncoderInstance(ctx, func, line);
     
     VLOG(ERR, "[%s:%d] Instance %d encoder closed, error_count=%d\n",
          func, line, ctx->instance_id, ctx->error_count);
@@ -1551,6 +1588,7 @@ amv_enc_handle_t AML_MultiEncInitialize(AMVEncInitParams* encParam)
   ctx->magic_num = MULTI_ENC_MAGIC;
 
   ctx->instance_id = 0;
+  ctx->enc_inst_index = -1;
   ctx->src_idx = 0;
   ctx->enc_counter = 0;
   ctx->state = AMVEnc_Initializing;
@@ -1647,6 +1685,7 @@ amv_enc_handle_t AML_MultiEncInitialize(AMVEncInitParams* encParam)
     ctx->enchandle = NULL;
     goto fail_exit;
   }
+  ctx->enc_inst_index = ctx->enchandle->instIndex;
   /* Wave521 preset GOP startup is driven by gopPresetIdx in the open params.
    * The legacy instance-param sync path carries the older gopOption dialect
    * and is not needed for gop_pattern-based preset startup. Skip it there to
@@ -2116,9 +2155,10 @@ AMVEnc_Status AML_MultiEncSetInput(amv_enc_handle_t ctx_handle,
   param->forcePicQpP                         = ctx->mInitParams.forcePicQpP;
   param->forcePicQpB                         = ctx->mInitParams.forcePicQpB;
 
-  if (ctx->op_flag & AMVEncFrameIO_FORCE_IDR_FLAG) {
+  if ((ctx->op_flag & AMVEncFrameIO_FORCE_IDR_FLAG) || ctx->force_idr_on_next_frame) {
     param->forcePicTypeEnable = 1;
     param->forcePicType = 3; //  0 for I frame. 3 for IDR
+    ctx->force_idr_on_next_frame = 0;
   } else {
     param->forcePicTypeEnable = 0;
     param->forcePicType = 0;
@@ -2571,11 +2611,8 @@ AMVEnc_Status AML_MultiEncNAL(amv_enc_handle_t ctx_handle,
   if (ctx == NULL) return AMVENC_FAIL;
   if (ctx->magic_num != MULTI_ENC_MAGIC) return AMVENC_FAIL;
 
-  /* Check if we need to force IDR due to previous VLC_BUF_FULL */
-  if (ctx->force_idr_on_next_frame) {
-      VLOG(INFO, "Instance %d: Forcing IDR due to previous VLC_BUF_FULL\n", ctx->instance_id);
-      ctx->force_idr_on_next_frame = 0;
-  }
+  if (ctx->force_idr_on_next_frame)
+      VLOG(INFO, "Instance %d: next submitted frame will be forced to IDR\n", ctx->instance_id);
 
   /* Validate and update state for frame encoding */
   if (ctx->state != AMVEnc_Analyzing_Frame && ctx->state != AMVEnc_Encoding_Frame) {
@@ -2662,7 +2699,7 @@ retry_pointB:
         ctx->fullInterrupt = TRUE;
         *buf_nal_size = 0;
         Retframe->YCbCr[0] = 0;
-        return AMVENC_SUCCESS;
+        return AMVENC_FAIL;
     }
     else if (intStatus == ENC_INT_STATUS_NONE) {
        Uint32  intr_usr = 0;
@@ -2815,7 +2852,6 @@ AMVEnc_Status AML_MultiEncRelease(amv_enc_handle_t ctx_handle) {
   RetCode       result;
   EncParam*    encParam;
   AMVMultiCtx * ctx = (AMVMultiCtx* ) ctx_handle;
-  ENC_INT_STATUS intStatus;
   Uint32 coreIdx = ctx->encOpenParam.coreIdx;
   int idx;
 
@@ -2856,37 +2892,22 @@ flush_retry_point:
             //return AMVENC_FAIL;
         }
     }
-    while (VPU_EncClose(ctx->enchandle) == RETCODE_VPU_STILL_RUNNING) {
-        if ((intStatus = HandlingInterruptFlag(ctx)) == ENC_INT_STATUS_TIMEOUT) {
-            HandleEncoderError(ctx->enchandle, ctx->frameIdx, NULL);
-            VLOG(ERR, "NO RESPONSE FROM VPU_EncClose2()\n");
-            ret = AMVENC_TIMEOUT;
-            break;
-        }
-        else if (intStatus == ENC_INT_STATUS_DONE) {
-            EncOutputInfo   outputInfo;
-            VLOG(INFO, "VPU_EncClose() : CLEAR REMAIN INTERRUPT\n");
-            VPU_EncGetOutputInfo(ctx->enchandle, &outputInfo);
-            continue;
-        }
-
-        osal_msleep(10);
-    }
+    ret = CloseEncoderInstance(ctx, __FUNCTION__, __LINE__);
 
   if (ctx->vbCustomLambda.size)
-    vdi_free_dma_memory(coreIdx, &ctx->vbCustomLambda, ENC_ETC, ctx->enchandle->instIndex);
+    vdi_free_dma_memory(coreIdx, &ctx->vbCustomLambda, ENC_ETC, ctx->enc_inst_index);
   if (ctx->vbScalingList.size)
-    vdi_free_dma_memory(coreIdx, &ctx->vbScalingList, ENC_ETC, ctx->enchandle->instIndex);
+    vdi_free_dma_memory(coreIdx, &ctx->vbScalingList, ENC_ETC, ctx->enc_inst_index);
 
   for (idx = 0; idx < MAX_REG_FRAME; idx++) {
     if (ctx->pFbReconMem[idx].size)
-      vdi_free_dma_memory(coreIdx, &ctx->pFbReconMem[idx], ENC_FBC, ctx->enchandle->instIndex);
+      vdi_free_dma_memory(coreIdx, &ctx->pFbReconMem[idx], ENC_FBC, ctx->enc_inst_index);
     if (ctx->vbCustomMap[idx].size)
-      vdi_free_dma_memory(coreIdx, &ctx->vbCustomMap[idx], ENC_ETC, ctx->enchandle->instIndex);
+      vdi_free_dma_memory(coreIdx, &ctx->vbCustomMap[idx], ENC_ETC, ctx->enc_inst_index);
   }
   for (idx = 0; idx < ENC_SRC_BUF_NUM; idx++) {
     if (ctx->pFbSrcMem[idx].size)
-      vdi_free_dma_memory(coreIdx, &ctx->pFbSrcMem[idx], ENC_SRC, ctx->enchandle->instIndex);
+      vdi_free_dma_memory(coreIdx, &ctx->pFbSrcMem[idx], ENC_SRC, ctx->enc_inst_index);
     if (ctx->bsBuffer[idx].size)
       vdi_free_dma_memory(coreIdx, &ctx->bsBuffer[idx], ENC_BS, 0);
   }
