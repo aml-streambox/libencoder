@@ -2057,6 +2057,9 @@ AMVEnc_Status AML_MultiEncSetInput(amv_enc_handle_t ctx_handle,
   ctx->pFbSrc[idx].stride = src_stride; /**< A horizontal stride for given frame buffer */
   ctx->pFbSrc[idx].height = input->height; /**< A height for given frame buffer */
 
+  VLOG(DEBUG, "SetInput: srcIdx=%d memSlot=%d disp_order=%u fd0=%d frameIdx=%d src_num=%d\n",
+       param->srcIdx, idx, input->disp_order, input->shared_fd[0], ctx->frameIdx, ctx->src_num);
+
   VLOG(INFO, "Assign src buffer,input idx %d poolidx %d stride %d \n",param->srcIdx, idx, src_stride);
   if (ctx->bsBuffer[idx].size == 0) { // allocate buffer
     ctx->bsBuffer[idx].size = ctx->bsBuffer[0].size; //ENC_STREAM_BUF_SIZE;
@@ -2739,6 +2742,13 @@ retry_pointB:
         idx = ctx->encMEMSrcFrmIdxArr[encOutputInfo.encSrcIdx];
         ctx->encodedSrcFrmIdxArr[idx] = 0;
         ctx->fullInterrupt  = FALSE;
+
+        VLOG(DEBUG, "NAL output: encSrcIdx=%d encPicPoc=%d picType=%d "
+             "memSlot=%d disp_order=%u bitstreamSize=%d\n",
+             encOutputInfo.encSrcIdx, encOutputInfo.encPicPoc,
+             encOutputInfo.picType, idx, ctx->FrameIO[idx].disp_order,
+             encOutputInfo.bitstreamSize);
+
         // copy frames
 
         VLOG(INFO, "Enc bitstream size %d pic_type %d avgQP %d\n",

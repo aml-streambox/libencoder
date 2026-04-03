@@ -1204,7 +1204,15 @@ encoding_metadata_t vl_multi_encoder_encode(vl_codec_handle_t codec_handle,
     //VLOG(ERR, "AML_MultiEncNAL cost: %3.1f ms", (t2-t1)/1000.0);
     VLOG(NONE, "AML_MultiEnc ret %d,  dataLength %d\n",
          ret,dataLength);
-    if (ret == AMVENC_PICTURE_READY) {
+    if (ret == AMVENC_PICTURE_READY && dataLength == 0) {
+      /* B-frame reorder delay: VPU returned PICTURE_READY but with no
+       * bitstream data (encSrcIdx == 0xfffffffe).  Do NOT enter the
+       * header-prepend / frame-type classification path — that would
+       * produce a fake 97-byte "I-frame" from the cached SPS/PPS and
+       * consume a GstVideoCodecFrame, breaking B-frame reorder.
+       * Return dataLength=0 so the plugin knows to skip this output. */
+      VLOG(INFO, "B-frame delay frame (dataLength=0), skipping header prepend\n");
+    } else if (ret == AMVENC_PICTURE_READY) {
       if ((videoRet.encoded_frame_type == 0) || !handle->mHeaderPrependedToStream){
         if ((handle->mPrependSPSPPSToIDRFrames ||
              !handle->mHeaderPrependedToStream) &&
@@ -1244,6 +1252,10 @@ encoding_metadata_t vl_multi_encoder_encode(vl_codec_handle_t codec_handle,
       result.extra.skipped_blocks = videoRet.enc_skipped_blocks;
       result.timestamp_us = (int) videoRet.coding_timestamp;
       result.input_frame_num = (int) videoRet.disp_order;
+      VLOG(DEBUG, "codec output: frame_type=%d disp_order=%u input_frame_num=%d "
+           "dataLength=%d\n",
+           result.extra.frame_type, videoRet.disp_order,
+           result.input_frame_num, dataLength);
     } else if ((ret == AMVENC_SKIPPED_PICTURE) || (ret == AMVENC_TIMEOUT)) {
       dataLength = 0;
       if (ret == AMVENC_TIMEOUT) {
