@@ -819,7 +819,15 @@ static BOOL SetupEncoderOpenParam(EncOpenParam *pEncOP, AMVEncInitParams* InitPa
 
   /* for CMD_ENC_RC_PARAM */
   //pEncOP->rcEnable             = InitParam -> rate_control;
-  pEncOP->vbvBufferSize = 3000;//pCfg->VbvBufferSize;
+  if (!pEncOP->rcEnable) {
+    pEncOP->vbvBufferSize = 0;
+  } else if (InitParam->rc_mode == 1) {
+    /* Match mainline Wave5 behavior more closely: use a tighter VBV for CBR
+     * instead of the large 3s buffer that behaves like relaxed VBR. */
+    pEncOP->vbvBufferSize = 500;
+  } else {
+    pEncOP->vbvBufferSize = 3000;
+  }
 
   param->cuLevelRCEnable = !param->losslessEnable ? 1 : 0;
   param->hvsQPEnable = !param->losslessEnable ? 1 : 0;
@@ -1035,7 +1043,7 @@ static BOOL SetupEncoderOpenParam(EncOpenParam *pEncOP, AMVEncInitParams* InitPa
   pEncOP->cbcrOrder      = CBCR_ORDER_NORMAL;
   pEncOP->lowLatencyMode = 0; // 2bits lowlatency mode setting. bit[1]: low latency interrupt enable, bit[0]: fast bitstream-packing enable.
   VLOG(INFO,
-       "SetupEncoderOpenParam: codec=%d fmt=%d src=%dx%d bitrate=%d fr=%d gop=%d rcEnable=%d srcBitDepth=%d internalBitDepth=%d srcFormat=%d outFormat=%d cbcrInterleave=%d nv21=%d streamBufCount=%d streamBufSize=%d lineBufIntEn=%d",
+       "SetupEncoderOpenParam: codec=%d fmt=%d src=%dx%d bitrate=%d fr=%d gop=%d rcEnable=%d rcMode=%d vbv=%d srcBitDepth=%d internalBitDepth=%d srcFormat=%d outFormat=%d cbcrInterleave=%d nv21=%d streamBufCount=%d streamBufSize=%d lineBufIntEn=%d",
        pEncOP->bitstreamFormat,
        InitParam->fmt,
        pEncOP->picWidth,
@@ -1044,6 +1052,8 @@ static BOOL SetupEncoderOpenParam(EncOpenParam *pEncOP, AMVEncInitParams* InitPa
        pEncOP->frameRateInfo,
        InitParam->idr_period,
        pEncOP->rcEnable,
+       InitParam->rc_mode,
+       pEncOP->vbvBufferSize,
        pEncOP->srcBitDepth,
        param->internalBitDepth,
        pEncOP->srcFormat,
