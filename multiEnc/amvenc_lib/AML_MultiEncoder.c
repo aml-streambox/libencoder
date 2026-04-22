@@ -1022,7 +1022,7 @@ static BOOL SetupEncoderOpenParam(EncOpenParam *pEncOP, AMVEncInitParams* InitPa
   if (pEncOP->streamBufCount < COMMAND_QUEUE_DEPTH )
     pEncOP->streamBufCount = COMMAND_QUEUE_DEPTH; //for encoder->numSinkPortQueue
   if (InitParam->fmt == AMVENC_P010)
-    pEncOP->srcFormat = FORMAT_420_P10_16BIT_MSB;
+    pEncOP->srcFormat = FORMAT_420_P10_16BIT_LSB;
   else
     pEncOP->srcFormat = FORMAT_420;
   if (InitParam->fmt == AMVENC_NV21)
@@ -1037,7 +1037,18 @@ static BOOL SetupEncoderOpenParam(EncOpenParam *pEncOP, AMVEncInitParams* InitPa
      pEncOP->cbcrInterleave = 0;
   pEncOP->frameEndian    = VPU_FRAME_ENDIAN;
   pEncOP->streamEndian   = VPU_STREAM_ENDIAN;
-  pEncOP->sourceEndian   = VPU_SOURCE_ENDIAN;
+  /* P010 input from our GPU shader (amly_to_p010.comp) is written as
+   * `value << 6` into a u16 LE word (left-justified, a.k.a. "MSB" per the
+   * vpuapi header comment at vpuapi.h:1119). On this Wave521 revision the
+   * MSB srcFormat read path does not produce correct samples; empirically
+   * the combination (srcFormat = FORMAT_420_P10_16BIT_LSB, sourceEndian =
+   * VDI_128BIT_LE_BYTE_SWAP) correctly reconstructs the 10-bit sample on
+   * reads from the DMA buffer. All other (srcFormat, sourceEndian) pairs
+   * tested produced corruption or hue shifts. */
+  if (InitParam->fmt == AMVENC_P010)
+    pEncOP->sourceEndian = VDI_128BIT_LE_BYTE_SWAP;
+  else
+    pEncOP->sourceEndian = VPU_SOURCE_ENDIAN;
   pEncOP->lineBufIntEn   = 1;
   pEncOP->coreIdx        = 0;
   pEncOP->cbcrOrder      = CBCR_ORDER_NORMAL;
