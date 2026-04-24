@@ -2124,6 +2124,8 @@ AMVEnc_Status AML_MultiEncSetInput(amv_enc_handle_t ctx_handle,
         ctx->pFbSrc[idx].dma_shared_fd[2] = input->shared_fd[2];
         VLOG(INFO,"Set DMA buffer index %d planes %d fd[%d, %d, %d]\n", idx, input->num_planes,
             input->shared_fd[0], input->shared_fd[1], input->shared_fd[2]);
+        ctx->pFbSrc[idx].cbcrInterleave = ctx->encOpenParam.cbcrInterleave;
+        ctx->pFbSrc[idx].nv21 = ctx->encOpenParam.nv21;
     }
   }
   ctx->FrameIO[idx] = *input;
