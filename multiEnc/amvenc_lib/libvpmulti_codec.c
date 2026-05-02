@@ -1028,7 +1028,8 @@ encoding_metadata_t vl_multi_encoder_encode(vl_codec_handle_t codec_handle,
     memset(&videoRet, 0, sizeof(videoRet));
     videoInput.height = handle->mEncParams.height;
     if (!in_buffer_info-> buf_stride)
-        videoInput.pitch = handle->mEncParams.width; //((handle->mEncParams.width + 15) >> 4) << 4;
+        videoInput.pitch = handle->mEncParams.width *
+            (in_buffer_info->buf_fmt == IMG_FMT_P010 ? 2 : 1); //((handle->mEncParams.width + 15) >> 4) << 4;
     else
         videoInput.pitch = in_buffer_info-> buf_stride;
     /* TODO*/

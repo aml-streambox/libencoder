@@ -955,6 +955,9 @@ RetCode VPU_EncStartOneFrame(
               if (pSrcFrame->cbcrInterleave == 0) { //
                    pSrcFrame->bufCr = (PhysicalAddress) (pSrcFrame -> bufCb +
                              pSrcFrame -> height*pSrcFrame -> stride/4);
+               } else if (pEncInfo->openParam.srcFormat == FORMAT_420_P10_16BIT_LSB ||
+                          pEncInfo->openParam.srcFormat == FORMAT_420_P10_16BIT_MSB) {
+                   pSrcFrame->bufCr = (PhysicalAddress)-1;
                } else {
                    pSrcFrame->bufCr = (PhysicalAddress) (pSrcFrame->bufCb +
                              pSrcFrame->height*pSrcFrame->stride/2);
@@ -962,9 +965,14 @@ RetCode VPU_EncStartOneFrame(
         }
         if (dma_info.num_planes >1 )
                 pSrcFrame -> bufCb = dma_info.phys_addr[1];
-        if (dma_info.num_planes == 2 && pSrcFrame->cbcrInterleave == 1)
-                pSrcFrame->bufCr = (PhysicalAddress) (pSrcFrame->bufCb +
-                            pSrcFrame->height*pSrcFrame->stride/2);
+        if (dma_info.num_planes == 2 && pSrcFrame->cbcrInterleave == 1) {
+                if (pEncInfo->openParam.srcFormat == FORMAT_420_P10_16BIT_LSB ||
+                    pEncInfo->openParam.srcFormat == FORMAT_420_P10_16BIT_MSB)
+                        pSrcFrame->bufCr = (PhysicalAddress)-1;
+                else
+                        pSrcFrame->bufCr = (PhysicalAddress) (pSrcFrame->bufCb +
+                                    pSrcFrame->height*pSrcFrame->stride/2);
+        }
         if (dma_info.num_planes > 2)
                pSrcFrame->bufCr = dma_info.phys_addr[2];
         VLOG(INFO,"DMA frame physical bufY 0x%x Cb 0x%x Cr 0x%x planes %d \n",

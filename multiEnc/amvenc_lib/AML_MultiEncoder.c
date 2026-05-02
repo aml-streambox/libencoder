@@ -1904,6 +1904,8 @@ AMVEnc_Status AML_MultiEncSetInput(amv_enc_handle_t ctx_handle,
   if (is_DMA_buffer) {
     if (!input->pitch) {
       src_stride = vp_align32(ctx->enc_width);
+      if (ctx->fmt == AMVENC_P010)
+        src_stride *= 2;
     } else {
       src_stride = input->pitch;
       if (ctx->fmt == AMVENC_NV12 || ctx->fmt == AMVENC_NV21 || ctx->fmt == AMVENC_YUV420P || ctx->fmt == AMVENC_P010) {
@@ -1917,6 +1919,8 @@ AMVEnc_Status AML_MultiEncSetInput(amv_enc_handle_t ctx_handle,
     }
   } else {
     src_stride = vp_align32(ctx->enc_width);
+    if (ctx->fmt == AMVENC_P010)
+      src_stride *= 2;
   }
   if (src_stride != input->pitch) {
     width32alinged = false;
